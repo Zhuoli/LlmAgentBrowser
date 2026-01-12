@@ -8,13 +8,26 @@ This demo compares different LLM models' ability to:
 
 Supported LLM Models:
 - ChatBrowserUse (Browser-Use Cloud)
-- Google Gemini 2.5 Pro
+- Google Gemini 3 Pro
 - Claude Opus 4.5
 - OpenAI GPT-5.2
 
 Usage:
     uv run python twitter_tweet_fetcher.py --model <model_name>
     uv run python twitter_tweet_fetcher.py --all
+
+Options:
+    --model         LLM model to use (browser-use, gemini, claude, openai)
+    --all           Run all models for comparison
+    --tweets        Number of tweets to fetch (default: 5)
+    --scrolls       Number of scrolls to perform when fetching content (default: 3)
+    --output        Output directory for Markdown files (default: output)
+    --log-level     Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)
+
+Logging:
+    Browser actions (clicks, scrolls, navigation, etc.) are logged to:
+    - Console: INFO level messages
+    - File: logs/browser_actions_<timestamp>.log (detailed logs)
 
 Models:
     browser-use, gemini, claude, openai, all
@@ -23,6 +36,7 @@ Models:
 import asyncio
 import argparse
 import json
+import logging
 import os
 import re
 import sys
@@ -35,6 +49,48 @@ from typing import Optional
 from dotenv import load_dotenv
 
 load_dotenv()
+
+# Logging setup
+LOG_DIR = Path("logs")
+LOG_DIR.mkdir(exist_ok=True)
+
+
+def setup_logging(log_level: str = "INFO") -> logging.Logger:
+    """Setup logging with both file and console handlers."""
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = LOG_DIR / f"browser_actions_{timestamp}.log"
+
+    logger = logging.getLogger("browser_actions")
+    logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
+
+    # Clear any existing handlers
+    logger.handlers.clear()
+
+    # File handler - detailed logs
+    file_handler = logging.FileHandler(log_file, encoding="utf-8")
+    file_handler.setLevel(logging.DEBUG)
+    file_formatter = logging.Formatter(
+        "%(asctime)s | %(levelname)-8s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    )
+    file_handler.setFormatter(file_formatter)
+    logger.addHandler(file_handler)
+
+    # Console handler - info level only
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.INFO)
+    console_formatter = logging.Formatter(
+        f"{Colors.BLUE}[LOG]{Colors.ENDC} %(message)s"
+    )
+    console_handler.setFormatter(console_formatter)
+    logger.addHandler(console_handler)
+
+    logger.info(f"Logging initialized. Log file: {log_file}")
+    return logger
+
+
+# Global logger instance
+logger: Optional[logging.Logger] = None
 
 # macOS Chrome paths
 CHROME_EXECUTABLE = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
@@ -102,42 +158,43 @@ def print_success(message: str) -> None:
 def get_llm(model_type: str):
     """Get the LLM instance based on model type."""
     if model_type == "browser-use":
-        from browser_use import ChatBrowserUse
+        from browser_use.llm import ChatBrowserUse
         api_key = os.getenv("BROWSER_USE_API_KEY")
         if not api_key:
             raise ValueError("BROWSER_USE_API_KEY environment variable is required")
         return ChatBrowserUse(), "Browser-Use Cloud"
 
     elif model_type == "gemini":
-        from langchain_google_genai import ChatGoogleGenerativeAI
+        from browser_use.llm import ChatGoogle
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise ValueError("GOOGLE_API_KEY environment variable is required")
-        return ChatGoogleGenerativeAI(
+        return ChatGoogle(
             model="gemini-3-pro-preview",
-            google_api_key=api_key,
-            temperature=0.0
+            api_key=api_key,
+            temperature=0.0,
+            max_output_tokens=32000,  # Gemini 3 Pro supports up to 65,536 output tokens
         ), "Google Gemini 3 Pro"
 
     elif model_type == "claude":
-        from langchain_anthropic import ChatAnthropic
+        from browser_use.llm import ChatAnthropic
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable is required")
         return ChatAnthropic(
             model="claude-opus-4-5-20251101",
-            anthropic_api_key=api_key,
+            api_key=api_key,
             temperature=0.0
         ), "Claude Opus 4.5"
 
     elif model_type == "openai":
-        from langchain_openai import ChatOpenAI
+        from browser_use.llm import ChatOpenAI
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable is required")
         return ChatOpenAI(
             model="gpt-5.2",
-            openai_api_key=api_key,
+            api_key=api_key,
             temperature=0.0
         ), "OpenAI GPT-5.2"
 
@@ -152,9 +209,41 @@ def parse_tweets_from_output(raw_output: str) -> list[Tweet]:
     """
     tweets = []
 
+    # Clean up raw_output - remove attachments section if present
+    # The browser_use agent sometimes appends "Attachments: filename: ..." to the output
+    if "Attachments:" in raw_output:
+        raw_output = raw_output.split("Attachments:")[0].strip()
+
+    # Extract JSON from markdown code blocks if present
+    code_block_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', raw_output)
+    if code_block_match:
+        raw_output = code_block_match.group(1).strip()
+
     # Try to parse as JSON first
     try:
-        # Look for JSON array in the output
+        # First, try parsing the entire stripped output as JSON
+        stripped = raw_output.strip()
+        if stripped.startswith('['):
+            data = json.loads(stripped)
+            for item in data:
+                tweet = Tweet(
+                    author=item.get("author", "Unknown"),
+                    handle=item.get("handle", ""),
+                    content=item.get("content", item.get("text", "")),
+                    link=item.get("link", item.get("url", "")),
+                    likes=item.get("likes"),
+                    retweets=item.get("retweets"),
+                    replies=item.get("replies"),
+                    timestamp=item.get("timestamp"),
+                )
+                tweets.append(tweet)
+            return tweets
+    except json.JSONDecodeError:
+        pass
+
+    # Try to find JSON array - use greedy match to get the full array
+    try:
+        # Find [ and match until the last ] to get the full JSON array
         json_match = re.search(r'\[[\s\S]*\]', raw_output)
         if json_match:
             data = json.loads(json_match.group())
@@ -277,9 +366,19 @@ def save_tweets_to_markdown(result: ModelResult, output_dir: Path) -> Path:
     return filepath
 
 
-async def fetch_tweets_with_model(model_type: str, num_tweets: int = 5) -> ModelResult:
+def log_browser_action(action_name: str, details: str = "") -> None:
+    """Log a browser action with details."""
+    global logger
+    if logger:
+        message = f"BROWSER ACTION: {action_name}"
+        if details:
+            message += f" | {details}"
+        logger.info(message)
+
+
+async def fetch_tweets_with_model(model_type: str, num_tweets: int = 5, num_scrolls: int = 3) -> ModelResult:
     """Fetch tweets from Twitter/X timeline using the specified LLM model."""
-    from browser_use import Agent, Browser
+    from browser_use import Agent, Browser, Controller
 
     start_time = time.time()
     result = ModelResult(model_name="", model_type=model_type)
@@ -299,54 +398,109 @@ async def fetch_tweets_with_model(model_type: str, num_tweets: int = 5) -> Model
             profile_directory=CHROME_PROFILE,
         )
 
-        # Task instructs LLM to return structured JSON
+        # Task instructs LLM to use JavaScript for extraction (faster than LLM-based extract)
         task = f"""
         Go to Twitter/X (https://x.com) and fetch tweets from the timeline.
 
         Instructions:
         1. Wait for the timeline to fully load (you should be logged in via Chrome profile)
-        2. Scroll to see recent tweets
-        3. Extract exactly {num_tweets} tweets
+        2. Scroll down the page exactly {num_scrolls} times to load more tweets
+           - Wait 2-3 seconds after each scroll to let content load
+        3. After all scrolls are complete, scroll back up to the top of the page
+        4. Use JavaScript (evaluate tool) to extract {num_tweets} tweets
 
-        For each tweet, extract:
-        - author: The display name of the tweet author
-        - handle: The @username (e.g., @elonmusk)
-        - content: The full tweet text
-        - link: The direct URL to the tweet (format: https://x.com/username/status/id)
-        - likes: Number of likes (if visible)
-        - retweets: Number of retweets (if visible)
-        - timestamp: When the tweet was posted (if visible)
+        IMPORTANT: Do NOT use the extract tool - it is too slow for Twitter pages.
+        Instead, use the evaluate tool with JavaScript to extract tweets directly from the DOM.
 
-        IMPORTANT: Return the data as a JSON array like this:
-        [
-            {{
-                "author": "Display Name",
-                "handle": "@username",
-                "content": "The tweet text...",
-                "link": "https://x.com/username/status/123456789",
-                "likes": 100,
-                "retweets": 50,
-                "timestamp": "2h"
+        Use this JavaScript code to extract tweets:
+        ```javascript
+        (function() {{
+            const tweets = [];
+            const articles = document.querySelectorAll('article[data-testid="tweet"]');
+            for (let i = 0; i < Math.min(articles.length, {num_tweets}); i++) {{
+                const article = articles[i];
+                try {{
+                    const authorEl = article.querySelector('div[data-testid="User-Name"]');
+                    const author = authorEl?.querySelector('span')?.textContent || '';
+                    const handleEl = authorEl?.querySelectorAll('span');
+                    let handle = '';
+                    for (const span of handleEl || []) {{
+                        if (span.textContent?.startsWith('@')) {{
+                            handle = span.textContent;
+                            break;
+                        }}
+                    }}
+                    const contentEl = article.querySelector('div[data-testid="tweetText"]');
+                    const content = contentEl?.textContent || '';
+                    const linkEl = article.querySelector('a[href*="/status/"]');
+                    const link = linkEl ? 'https://x.com' + linkEl.getAttribute('href') : '';
+                    const timeEl = article.querySelector('time');
+                    const timestamp = timeEl?.getAttribute('datetime') || timeEl?.textContent || '';
+                    const statsEls = article.querySelectorAll('div[data-testid$="-count"]');
+                    let likes = 0, retweets = 0, replies = 0;
+                    statsEls.forEach(el => {{
+                        const testId = el.getAttribute('data-testid') || '';
+                        const count = parseInt(el.textContent?.replace(/[^0-9]/g, '') || '0');
+                        if (testId.includes('reply')) replies = count;
+                        else if (testId.includes('retweet')) retweets = count;
+                        else if (testId.includes('like')) likes = count;
+                    }});
+                    if (content || author) {{
+                        tweets.push({{ author, handle, content, link, likes, retweets, replies, timestamp }});
+                    }}
+                }} catch (e) {{ }}
             }}
-        ]
+            return JSON.stringify(tweets, null, 2);
+        }})()
+        ```
+
+        After extracting, return the JSON result using done() with the extracted tweets.
 
         If you see a login page, report "LOGIN_REQUIRED" as an error.
         """
+
+        # Create controller with logging
+        controller = Controller()
+
+        # Log browser initialization
+        log_browser_action("INITIALIZE", f"Chrome profile: {CHROME_PROFILE}")
 
         agent = Agent(
             task=task,
             llm=llm,
             browser=browser,
+            controller=controller,
         )
 
         print_info("Starting agent to fetch tweets...")
+        log_browser_action("START", f"Model: {model_name}, Target tweets: {num_tweets}, Scrolls: {num_scrolls}")
+
         history = await agent.run(max_steps=25)
+
+        # Log all actions from history
+        if history and hasattr(history, 'history'):
+            for step_idx, step in enumerate(history.history):
+                if hasattr(step, 'model_output') and step.model_output:
+                    action = step.model_output.action
+                    if action:
+                        # Extract action details
+                        for action_item in action:
+                            action_dict = action_item.model_dump() if hasattr(action_item, 'model_dump') else {}
+                            for action_type, action_params in action_dict.items():
+                                if action_params is not None:
+                                    log_browser_action(
+                                        action_type.upper(),
+                                        f"Step {step_idx + 1} | Params: {action_params}"
+                                    )
 
         # Extract result from agent history
         raw_output = ""
         if history:
-            if hasattr(history, 'final_result') and history.final_result:
-                raw_output = history.final_result
+            # final_result is a method in browser_use
+            if hasattr(history, 'final_result') and callable(history.final_result):
+                final_res = history.final_result()
+                if final_res:
+                    raw_output = str(final_res)
             elif hasattr(history, 'result') and history.result:
                 raw_output = str(history.result)
             elif hasattr(history, 'actions') and history.actions:
@@ -362,18 +516,23 @@ async def fetch_tweets_with_model(model_type: str, num_tweets: int = 5) -> Model
             result.success = len(result.tweets) > 0
             if result.success:
                 print_success(f"Extracted {len(result.tweets)} tweets")
+                log_browser_action("COMPLETE", f"Successfully extracted {len(result.tweets)} tweets")
             else:
                 result.error_message = "Could not parse tweets from output"
                 print_error(result.error_message)
+                log_browser_action("ERROR", result.error_message)
         else:
             result.error_message = "No output from agent"
             print_error(result.error_message)
+            log_browser_action("ERROR", result.error_message)
 
     except Exception as e:
         result.error_message = str(e)
         print_error(f"Failed: {e}")
+        log_browser_action("EXCEPTION", str(e))
 
     result.execution_time = time.time() - start_time
+    log_browser_action("FINISH", f"Total execution time: {result.execution_time:.2f}s")
     return result
 
 
@@ -437,6 +596,18 @@ async def main():
         default="output",
         help="Output directory for Markdown files (default: output)"
     )
+    parser.add_argument(
+        "--scrolls",
+        type=int,
+        default=3,
+        help="Number of scrolls to perform when fetching content (default: 3)"
+    )
+    parser.add_argument(
+        "--log-level",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        default="INFO",
+        help="Logging level (default: INFO)"
+    )
 
     args = parser.parse_args()
 
@@ -447,10 +618,16 @@ async def main():
 
     output_dir = Path(args.output)
 
+    # Initialize logging
+    global logger
+    logger = setup_logging(args.log_level)
+
     print_header("Twitter/X Tweet Fetcher")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Tweets to fetch: {args.tweets}")
+    print(f"Scroll count: {args.scrolls}")
     print(f"Output directory: {output_dir.absolute()}")
+    print(f"Log directory: {LOG_DIR.absolute()}")
 
     results = []
     saved_files = []
@@ -460,7 +637,7 @@ async def main():
         for model in models:
             print_header(f"Testing: {model.upper()}")
             try:
-                result = await fetch_tweets_with_model(model, args.tweets)
+                result = await fetch_tweets_with_model(model, args.tweets, args.scrolls)
                 results.append(result)
                 print_result_summary(result)
 
@@ -479,7 +656,7 @@ async def main():
 
         print_comparison(results)
     else:
-        result = await fetch_tweets_with_model(args.model, args.tweets)
+        result = await fetch_tweets_with_model(args.model, args.tweets, args.scrolls)
         results.append(result)
         print_result_summary(result)
 
