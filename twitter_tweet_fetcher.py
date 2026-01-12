@@ -100,7 +100,10 @@ def print_success(message: str) -> None:
 
 
 def get_llm(model_type: str):
-    """Get the LLM instance based on model type."""
+    """Get the LLM instance based on model type.
+
+    Uses browser-use's native LLM wrappers for compatibility.
+    """
     if model_type == "browser-use":
         from browser_use import ChatBrowserUse
         api_key = os.getenv("BROWSER_USE_API_KEY")
@@ -109,36 +112,33 @@ def get_llm(model_type: str):
         return ChatBrowserUse(), "Browser-Use Cloud"
 
     elif model_type == "gemini":
-        from langchain_google_genai import ChatGoogleGenerativeAI
+        from browser_use import ChatGoogle
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise ValueError("GOOGLE_API_KEY environment variable is required")
-        return ChatGoogleGenerativeAI(
+        return ChatGoogle(
             model="gemini-3-pro-preview",
-            google_api_key=api_key,
-            temperature=0.0
+            api_key=api_key,
         ), "Google Gemini 3 Pro"
 
     elif model_type == "claude":
-        from langchain_anthropic import ChatAnthropic
+        from browser_use import ChatAnthropic
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable is required")
         return ChatAnthropic(
             model="claude-opus-4-5-20251101",
-            anthropic_api_key=api_key,
-            temperature=0.0
+            api_key=api_key,
         ), "Claude Opus 4.5"
 
     elif model_type == "openai":
-        from langchain_openai import ChatOpenAI
+        from browser_use import ChatOpenAI
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable is required")
         return ChatOpenAI(
             model="gpt-5.2",
-            openai_api_key=api_key,
-            temperature=0.0
+            api_key=api_key,
         ), "OpenAI GPT-5.2"
 
     else:
