@@ -1,4 +1,5 @@
 .PHONY: help install run run-all gemini claude openai headed headed-gemini clean clean-logs clean-output
+.PHONY: chrome chrome-gemini chrome-openai
 
 # Configuration
 TWEETS ?= 5
@@ -11,8 +12,11 @@ SCROLLS = $(shell echo $$(( ($(TWEETS) + 4) / 5 )))
 help: ## Show this help message
 	@echo "Usage: make [target]"
 	@echo ""
-	@echo "agent-browser Targets (Vercel Labs - Playwright/Chromium):"
-	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*##/ && !/^(install|clean)/ {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@echo "Run with Chrome Profile (uses your existing Twitter login):"
+	@awk 'BEGIN {FS = ":.*##"} /^chrome[a-zA-Z_-]*:.*##/ {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@echo ""
+	@echo "Run with Fresh Browser (requires Twitter login):"
+	@awk 'BEGIN {FS = ":.*##"} /^(run|gemini|claude|openai|headed)[a-zA-Z_-]*:.*##/ {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ""
 	@echo "Setup & Utility:"
 	@awk 'BEGIN {FS = ":.*##"} /^(install|clean)[a-zA-Z_-]*:.*##/ {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -23,9 +27,10 @@ help: ## Show this help message
 	@echo "  LOG_LEVEL=<lvl>  Logging level: DEBUG, INFO, WARNING, ERROR (default: INFO)"
 	@echo ""
 	@echo "Examples:"
-	@echo "  make claude TWEETS=10       # Run with Claude Sonnet 4"
-	@echo "  make gemini TWEETS=10       # Run with Gemini 2.0 Flash"
-	@echo "  make headed                 # Run with visible browser window"
+	@echo "  make chrome TWEETS=10        # Use Chrome profile with Claude (RECOMMENDED)"
+	@echo "  make chrome-gemini TWEETS=10 # Use Chrome profile with Gemini"
+	@echo "  make claude TWEETS=10        # Fresh browser with Claude"
+	@echo "  make headed                  # Fresh browser with visible window"
 
 install: ## Install dependencies using uv
 	uv sync
@@ -33,6 +38,23 @@ install: ## Install dependencies using uv
 install-browser: ## Install agent-browser CLI and Chromium
 	npm install -g agent-browser
 	agent-browser install
+
+# ============================================================================
+# Chrome Profile Targets (RECOMMENDED - uses your existing Twitter login!)
+# ============================================================================
+
+chrome: ## Run with Chrome profile + Claude (uses existing logins)
+	uv run python twitter_fetcher_agentbrowser.py --model claude --tweets $(TWEETS) --scrolls $(SCROLLS) --output $(OUTPUT) --log-level $(LOG_LEVEL) --use-chrome-profile
+
+chrome-gemini: ## Run with Chrome profile + Gemini
+	uv run python twitter_fetcher_agentbrowser.py --model gemini --tweets $(TWEETS) --scrolls $(SCROLLS) --output $(OUTPUT) --log-level $(LOG_LEVEL) --use-chrome-profile
+
+chrome-openai: ## Run with Chrome profile + OpenAI
+	uv run python twitter_fetcher_agentbrowser.py --model openai --tweets $(TWEETS) --scrolls $(SCROLLS) --output $(OUTPUT) --log-level $(LOG_LEVEL) --use-chrome-profile
+
+# ============================================================================
+# Fresh Browser Targets (requires Twitter login)
+# ============================================================================
 
 run: claude ## Run with default model (Claude)
 
@@ -53,6 +75,10 @@ headed: ## Run with visible browser window (Claude)
 
 headed-gemini: ## Run with visible browser window (Gemini)
 	uv run python twitter_fetcher_agentbrowser.py --model gemini --tweets $(TWEETS) --scrolls $(SCROLLS) --output $(OUTPUT) --log-level $(LOG_LEVEL) --headed
+
+# ============================================================================
+# Cleanup
+# ============================================================================
 
 clean: clean-logs clean-output ## Clean all generated files
 

@@ -15,16 +15,34 @@ Installation:
 Usage:
     from agent_browser_client import AgentBrowserClient
 
+    # Basic usage (fresh Chromium instance)
     async with AgentBrowserClient(session="my-session") as browser:
         await browser.open("https://example.com")
         snapshot = await browser.snapshot(interactive=True)
         await browser.click("@e1")
+
+    # Use installed Chrome with existing profile
+    async with AgentBrowserClient(
+        session="my-session",
+        executable_path="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+        user_data_dir="~/Library/Application Support/Google/Chrome",
+        headed=True
+    ) as browser:
+        await browser.open("https://x.com")  # Already logged in!
+
+    # Connect to existing Chrome via CDP (Chrome DevTools Protocol)
+    # First start Chrome with: chrome --remote-debugging-port=9222
+    async with AgentBrowserClient(
+        session="my-session",
+        cdp_url="http://localhost:9222"
+    ) as browser:
+        await browser.open("https://x.com")
 """
 
 import asyncio
 import json
+import os
 import shutil
-import subprocess
 from dataclasses import dataclass
 from typing import Any, Optional
 
@@ -50,6 +68,9 @@ class AgentBrowserClient:
         headed: Whether to show browser window (default: headless)
         debug: Enable debug output
         timeout: Default command timeout in seconds
+        executable_path: Path to Chrome/Chromium executable (uses default profile)
+        user_data_dir: Path to Chrome user data directory for profile persistence
+        cdp_url: Connect to existing Chrome via CDP (e.g., http://localhost:9222)
     """
 
     def __init__(
@@ -57,12 +78,18 @@ class AgentBrowserClient:
         session: str = "default",
         headed: bool = False,
         debug: bool = False,
-        timeout: float = 30.0
+        timeout: float = 30.0,
+        executable_path: Optional[str] = None,
+        user_data_dir: Optional[str] = None,
+        cdp_url: Optional[str] = None
     ):
         self.session = session
         self.headed = headed
         self.debug = debug
         self.timeout = timeout
+        self.executable_path = executable_path
+        self.user_data_dir = user_data_dir
+        self.cdp_url = cdp_url
         self._verified = False
 
     async def __aenter__(self):
@@ -108,15 +135,29 @@ class AgentBrowserClient:
             cmd.append("--headed")
         if self.debug:
             cmd.append("--debug")
+        if self.executable_path:
+            cmd.extend(["--executable-path", self.executable_path])
         cmd.extend(args)
 
         effective_timeout = timeout or self.timeout
+
+        # Set environment variables for options not directly supported by CLI
+        env = os.environ.copy()
+        if self.executable_path:
+            env["AGENT_BROWSER_EXECUTABLE_PATH"] = self.executable_path
+        if self.user_data_dir:
+            # Expand ~ to home directory
+            expanded_path = os.path.expanduser(self.user_data_dir)
+            env["AGENT_BROWSER_USER_DATA_DIR"] = expanded_path
+        if self.cdp_url:
+            env["AGENT_BROWSER_CDP_URL"] = self.cdp_url
 
         try:
             process = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE
+                stderr=asyncio.subprocess.PIPE,
+                env=env
             )
 
             stdout, stderr = await asyncio.wait_for(

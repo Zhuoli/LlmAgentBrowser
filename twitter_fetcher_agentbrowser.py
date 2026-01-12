@@ -577,9 +577,20 @@ async def fetch_tweets_with_agentbrowser(
     model_type: str,
     num_tweets: int = 5,
     num_scrolls: int = 3,
-    headed: bool = False
+    headed: bool = False,
+    use_chrome_profile: bool = False,
+    chrome_profile_path: Optional[str] = None
 ) -> ModelResult:
-    """Fetch tweets using agent-browser + LLM."""
+    """Fetch tweets using agent-browser + LLM.
+
+    Args:
+        model_type: LLM model to use (gemini, claude, openai)
+        num_tweets: Number of tweets to fetch
+        num_scrolls: Number of page scrolls
+        headed: Show browser window
+        use_chrome_profile: Use default Chrome profile (with existing logins)
+        chrome_profile_path: Custom path to Chrome user data directory
+    """
     start_time = time.time()
     result = ModelResult(model_name="", model_type=model_type)
 
@@ -591,7 +602,30 @@ async def fetch_tweets_with_agentbrowser(
     result.model_name = model_names.get(model_type, model_type)
 
     print(f"{Colors.CYAN}[Model]{Colors.ENDC} {Colors.BOLD}{result.model_name}{Colors.ENDC}")
-    print_info("Using agent-browser (Playwright/Chromium)")
+
+    # Determine Chrome profile settings
+    executable_path = None
+    user_data_dir = None
+
+    if use_chrome_profile or chrome_profile_path:
+        # Use installed Chrome instead of bundled Chromium
+        if sys.platform == "darwin":  # macOS
+            executable_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            default_profile = os.path.expanduser("~/Library/Application Support/Google/Chrome")
+        elif sys.platform == "win32":  # Windows
+            executable_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+            default_profile = os.path.expanduser(r"~\AppData\Local\Google\Chrome\User Data")
+        else:  # Linux
+            executable_path = "/usr/bin/google-chrome"
+            default_profile = os.path.expanduser("~/.config/google-chrome")
+
+        user_data_dir = chrome_profile_path or default_profile
+        print_info(f"Using Chrome with profile: {user_data_dir}")
+        # Force headed mode when using Chrome profile
+        headed = True
+    else:
+        print_info("Using agent-browser (Playwright/Chromium)")
+
     if headed:
         print_info("Running in headed mode - browser window visible")
     else:
@@ -601,7 +635,12 @@ async def fetch_tweets_with_agentbrowser(
     session_name = f"twitter_{model_type}_{int(time.time())}"
 
     try:
-        async with AgentBrowserClient(session=session_name, headed=headed) as browser:
+        async with AgentBrowserClient(
+            session=session_name,
+            headed=headed,
+            executable_path=executable_path,
+            user_data_dir=user_data_dir
+        ) as browser:
             print_success("Connected to agent-browser")
 
             orchestrator = AgentBrowserOrchestrator(model_type, browser)
@@ -753,6 +792,17 @@ async def main():
         default="INFO",
         help="Logging level (default: INFO)"
     )
+    parser.add_argument(
+        "--use-chrome-profile",
+        action="store_true",
+        help="Use your default Chrome profile (with existing logins like Twitter)"
+    )
+    parser.add_argument(
+        "--chrome-profile-path",
+        type=str,
+        default=None,
+        help="Custom path to Chrome user data directory"
+    )
 
     args = parser.parse_args()
 
@@ -772,6 +822,10 @@ async def main():
     print(f"Scroll count: {args.scrolls}")
     print(f"Output directory: {output_dir.absolute()}")
     print(f"Headed mode: {args.headed}")
+    if args.use_chrome_profile or args.chrome_profile_path:
+        print(f"{Colors.GREEN}Chrome Profile: Enabled (using existing logins){Colors.ENDC}")
+        if args.chrome_profile_path:
+            print(f"Profile path: {args.chrome_profile_path}")
     print()
     print(f"{Colors.CYAN}Using agent-browser (Vercel Labs){Colors.ENDC}")
     print(f"{Colors.CYAN}Features: Ref-based selection, Playwright/Chromium{Colors.ENDC}")
@@ -785,7 +839,8 @@ async def main():
             print_header(f"Testing: {model.upper()}")
             try:
                 result = await fetch_tweets_with_agentbrowser(
-                    model, args.tweets, args.scrolls, args.headed
+                    model, args.tweets, args.scrolls, args.headed,
+                    args.use_chrome_profile, args.chrome_profile_path
                 )
                 results.append(result)
                 print_result_summary(result)
@@ -805,7 +860,8 @@ async def main():
         print_comparison(results)
     else:
         result = await fetch_tweets_with_agentbrowser(
-            args.model, args.tweets, args.scrolls, args.headed
+            args.model, args.tweets, args.scrolls, args.headed,
+            args.use_chrome_profile, args.chrome_profile_path
         )
         results.append(result)
         print_result_summary(result)
