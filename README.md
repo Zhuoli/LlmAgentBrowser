@@ -6,13 +6,14 @@ A demo project to evaluate different approaches for LLM-powered browser automati
 
 ## Browser Automation Approaches
 
-This project implements **three different approaches** for browser automation:
+This project implements **four different approaches** for browser automation:
 
-| Approach | Close Chrome? | Setup | Recommended |
-|----------|---------------|-------|-------------|
-| **Browser MCP** | **No** | Chrome Extension + MCP | **Yes** |
-| browser-use | Yes | Python library | No |
-| Chrome DevTools MCP | Yes | MCP Server | No |
+| Approach | Close Chrome? | Setup | Key Feature | Recommended |
+|----------|---------------|-------|-------------|-------------|
+| **Browser MCP** | **No** | Chrome Extension + MCP | Existing login sessions | **Yes** |
+| **agent-browser** | N/A (own Chromium) | `npm install -g agent-browser` | Ref-based selection | For automation |
+| browser-use | Yes | Python library | Simple API | No |
+| Chrome DevTools MCP | Yes | MCP Server | Full DevTools | No |
 
 ### Why Browser MCP is Recommended
 
@@ -21,6 +22,14 @@ Browser MCP uses a Chrome Extension that injects into your **running browser**, 
 - Uses your existing Twitter login session
 - Avoids bot detection (real browser fingerprint)
 - Works alongside your normal browsing
+
+### When to Use agent-browser
+
+[agent-browser](https://github.com/vercel-labs/agent-browser) from Vercel Labs is ideal for:
+- **Automation pipelines** where no existing session is needed
+- **LLM-optimal workflows** with ref-based element selection (@e1, @e2)
+- **Parallel browser sessions** with session isolation
+- **Headless operation** (or headed for debugging)
 
 ## Quick Start (Browser MCP)
 
@@ -64,9 +73,9 @@ make bmcp-openai TWEETS=5
 
 | Model | Provider | Used By |
 |-------|----------|---------|
-| Gemini 2.0 Flash | Google | Browser MCP, Chrome DevTools MCP |
-| Claude Sonnet 4 | Anthropic | Browser MCP, Chrome DevTools MCP |
-| GPT-4o | OpenAI | Browser MCP, Chrome DevTools MCP |
+| Gemini 2.0 Flash | Google | Browser MCP, Chrome DevTools MCP, agent-browser |
+| Claude Sonnet 4 | Anthropic | Browser MCP, Chrome DevTools MCP, agent-browser |
+| GPT-4o | OpenAI | Browser MCP, Chrome DevTools MCP, agent-browser |
 | Gemini 3 Pro | Google | browser-use |
 | Claude Opus 4.5 | Anthropic | browser-use |
 | GPT-5.2 | OpenAI | browser-use |
@@ -134,6 +143,26 @@ make bmcp-openai TWEETS=5
 
 # Compare all models
 make bmcp-all TWEETS=5
+```
+
+### agent-browser (Vercel Labs)
+
+Uses Playwright/Chromium with ref-based element selection. Great for automation pipelines.
+
+```bash
+# Install agent-browser (one-time setup)
+make ab-install
+
+# Run with different models
+make ab-claude TWEETS=5
+make ab-gemini TWEETS=5
+make ab-openai TWEETS=5
+
+# Run with visible browser window (for debugging)
+make ab-headed TWEETS=5
+
+# Compare all models
+make ab-all TWEETS=5
 ```
 
 ### browser-use (Legacy)
@@ -237,6 +266,30 @@ output/
 3. **LLM** orchestrates browser actions via MCP tools
 4. **Your existing login session** is preserved (Twitter, etc.)
 
+### agent-browser Architecture
+
+```
+┌─────────────────┐                       ┌─────────────────┐
+│   LLM Client    │───subprocess/CLI────►│ agent-browser   │
+│ (Claude/Gemini) │                       │  (Rust CLI)     │
+└─────────────────┘                       └────────┬────────┘
+                                                   │
+                                          ┌────────▼────────┐
+                                          │ Node.js Daemon  │
+                                          │ (BrowserManager)│
+                                          └────────┬────────┘
+                                                   │
+                                          ┌────────▼────────┐
+                                          │   Playwright    │
+                                          │   (Chromium)    │
+                                          └─────────────────┘
+```
+
+1. **Python wrapper** calls agent-browser CLI commands via subprocess
+2. **Rust CLI** communicates with persistent Node.js daemon
+3. **Daemon** manages Playwright browser instance
+4. **Ref-based selection** (@e1, @e2) from accessibility snapshots for LLM-optimal interaction
+
 ### Available Browser MCP Tools
 
 | Tool | Description |
@@ -249,19 +302,39 @@ output/
 | `browser_screenshot` | Take screenshot |
 | `browser_wait` | Wait for duration |
 
+### Available agent-browser Tools
+
+| Tool | Description |
+|------|-------------|
+| `browser_open` | Navigate to a URL |
+| `browser_click` | Click element by ref (@e1) or selector |
+| `browser_type` | Type text into element |
+| `browser_fill` | Fill input (clears first) |
+| `browser_snapshot` | Get accessibility tree with element refs |
+| `browser_scroll` | Scroll page up/down |
+| `browser_press` | Press keyboard key |
+| `browser_wait` | Wait for element or duration |
+| `browser_evaluate` | Execute JavaScript |
+| `browser_screenshot` | Take screenshot |
+| `browser_hover` | Hover over element |
+| `browser_get_text` | Get text content |
+
 ## Project Structure
 
 ```
 LlmAgentBrowser/
-├── twitter_fetcher_browsermcp.py  # Browser MCP implementation (RECOMMENDED)
-├── twitter_fetcher_mcp.py         # Chrome DevTools MCP implementation
-├── twitter_tweet_fetcher.py       # browser-use implementation (legacy)
-├── design.md                      # Architecture design document
-├── Makefile                       # Build targets
-├── pyproject.toml                 # Dependencies (uv)
-├── .env.example                   # API key template
-├── .env                           # Your API keys (git-ignored)
-└── output/                        # Generated Markdown files
+├── twitter_fetcher_browsermcp.py     # Browser MCP implementation (RECOMMENDED)
+├── twitter_fetcher_agentbrowser.py   # agent-browser implementation
+├── agent_browser_client.py           # Python wrapper for agent-browser CLI
+├── twitter_fetcher_mcp.py            # Chrome DevTools MCP implementation
+├── twitter_tweet_fetcher.py          # browser-use implementation (legacy)
+├── design.md                         # Architecture design document
+├── PLAN_agent_browser_refactor.md    # agent-browser integration plan
+├── Makefile                          # Build targets
+├── pyproject.toml                    # Dependencies (uv)
+├── .env.example                      # API key template
+├── .env                              # Your API keys (git-ignored)
+└── output/                           # Generated Markdown files
 ```
 
 ## Troubleshooting
@@ -286,9 +359,26 @@ Wait a few minutes and try again, or switch to a different LLM provider.
 
 These approaches require closing all Chrome windows first. Use **Browser MCP** instead to avoid this.
 
+### agent-browser: "agent-browser is not installed"
+
+Install agent-browser and Chromium:
+```bash
+make ab-install
+# Or manually:
+npm install -g agent-browser
+agent-browser install
+```
+
+### agent-browser: Twitter login required
+
+agent-browser uses a fresh Chromium browser without your existing sessions. Options:
+1. Use `--headed` mode to manually login: `make ab-headed`
+2. Use Browser MCP instead if you want to use existing login
+
 ## References
 
 - [Browser MCP](https://browsermcp.io/) - Chrome Extension + MCP Server
+- [agent-browser](https://github.com/vercel-labs/agent-browser) - Vercel Labs headless browser for AI agents
 - [Chrome MCP Server](https://github.com/hangwin/mcp-chrome) - Alternative with more tools
 - [browser-use](https://github.com/browser-use/browser-use) - Python browser automation
 - [Chrome DevTools MCP](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo) - Official Anthropic MCP
