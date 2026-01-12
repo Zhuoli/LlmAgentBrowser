@@ -40,3 +40,9 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# Output
+output/
+
+# uv
+uv.lock

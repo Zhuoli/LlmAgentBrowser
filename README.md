@@ -1,6 +1,8 @@
 # LLM Browser Agent Demo - Twitter/X Tweet Fetcher
 
-A demo project to evaluate different LLM models using [browser-use](https://github.com/browser-use/browser-use) for autonomous web browsing. This project fetches tweets from Twitter/X timeline using your logged-in Chrome profile.
+A demo project to evaluate different LLM models using [browser-use](https://github.com/browser-use/browser-use) for autonomous web browsing. Fetches tweets from your Twitter/X timeline and saves them as structured Markdown.
+
+**Platform:** macOS only
 
 ## Supported LLM Models
 
@@ -13,8 +15,10 @@ A demo project to evaluate different LLM models using [browser-use](https://gith
 
 ## Prerequisites
 
+- macOS
 - Python >= 3.11
-- Google Chrome browser (with your Twitter/X account logged in)
+- [uv](https://docs.astral.sh/uv/) package manager
+- Google Chrome (with your Twitter/X account logged in)
 - API keys for the LLM providers you want to test
 
 ## Installation
@@ -25,23 +29,17 @@ git clone <repo-url>
 cd LlmAgentBrowser
 ```
 
-2. Create and activate a virtual environment:
+2. Install dependencies with uv:
 ```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+uv sync
 ```
 
-3. Install dependencies:
+3. Install browser-use CLI tools:
 ```bash
-pip install -r requirements.txt
+uv run browser-use install
 ```
 
-4. Install browser-use CLI tools:
-```bash
-uvx browser-use install
-```
-
-5. Set up your environment variables:
+4. Set up your environment variables:
 ```bash
 cp .env.example .env
 # Edit .env and add your API keys
@@ -67,100 +65,117 @@ OPENAI_API_KEY=your-openai-api-key
 
 ## Usage
 
-**Important**: Close all Chrome browser windows before running the script, as browser-use needs exclusive access to your Chrome profile.
+**Important**: Close all Chrome browser windows before running.
 
 ### Test a single model:
 
 ```bash
-# Using Browser-Use Cloud
-python twitter_tweet_fetcher.py --model browser-use
-
 # Using Google Gemini
-python twitter_tweet_fetcher.py --model gemini
+uv run python twitter_tweet_fetcher.py --model gemini
 
 # Using Claude Opus 4.5
-python twitter_tweet_fetcher.py --model claude
+uv run python twitter_tweet_fetcher.py --model claude
 
 # Using OpenAI GPT-5.2
-python twitter_tweet_fetcher.py --model openai
+uv run python twitter_tweet_fetcher.py --model openai
+
+# Using Browser-Use Cloud
+uv run python twitter_tweet_fetcher.py --model browser-use
 ```
 
 ### Test all models for comparison:
 
 ```bash
-python twitter_tweet_fetcher.py --all
+uv run python twitter_tweet_fetcher.py --all
 ```
 
-### Customize number of tweets to fetch:
+### Options:
 
 ```bash
-python twitter_tweet_fetcher.py --model gemini --tweets 10
+uv run python twitter_tweet_fetcher.py --model gemini --tweets 10 --output my_tweets
+```
+
+| Option | Description | Default |
+|--------|-------------|---------|
+| `--model` | LLM model to use | Required (or use --all) |
+| `--all` | Run all models for comparison | - |
+| `--tweets` | Number of tweets to fetch | 5 |
+| `--output` | Output directory for Markdown files | `output` |
+
+## Output Format
+
+Tweets are saved as structured Markdown files in the `output/` directory:
+
+```
+output/
+  tweets_gemini_20250112_143022.md
+  tweets_claude_20250112_143156.md
+  ...
+```
+
+### Example Markdown Output:
+
+```markdown
+# Twitter/X Timeline Tweets
+
+**Model:** Google Gemini 2.5 Pro
+**Fetched at:** 2025-01-12 14:30:22
+**Execution time:** 45.32 seconds
+
+---
+
+## Tweet 1
+
+| Field | Value |
+|-------|-------|
+| **Author** | Elon Musk |
+| **Handle** | @elonmusk |
+| **Link** | [https://x.com/elonmusk/status/123...](https://x.com/elonmusk/status/123...) |
+| **Time** | 2h |
+
+### Content
+
+> This is the tweet content here...
+
+**Engagement:** 1234 likes | 567 retweets
+
+---
 ```
 
 ## How It Works
 
-1. **Browser Connection**: The script connects to Chrome using your default profile (where you're logged into Twitter/X)
-2. **Agent Execution**: The LLM agent navigates to Twitter/X, waits for the timeline to load
-3. **Tweet Extraction**: The agent extracts tweet content including author, text, and engagement metrics
-4. **Results Display**: Tweets are printed with timing information for model comparison
-
-## Output Example
-
-```
-============================================================
-          Twitter/X Tweet Fetcher Demo
-============================================================
-
-Timestamp: 2025-01-11 10:30:45
-Tweets to fetch: 5
-
-[Model] Google Gemini 2.5 Pro
-[INFO] Chrome executable: /usr/bin/google-chrome
-[INFO] Starting agent to fetch tweets...
-[SUCCESS] Successfully fetched tweets using Google Gemini 2.5 Pro
-
-============================================================
-          Results: Google Gemini 2.5 Pro
-============================================================
-
-Execution Time: 45.32 seconds
-Status: Success
-
-Fetched Content:
---- Tweet #1 ---
-@user1: Just shipped a new feature!
-Likes: 234 | Retweets: 45
-
-...
-```
+1. **Browser Connection**: Connects to Chrome using your default profile (where you're logged into Twitter/X)
+2. **Agent Execution**: The LLM agent navigates to Twitter/X and waits for timeline to load
+3. **Tweet Extraction**: Agent extracts author, handle, content, link, and engagement metrics
+4. **Markdown Export**: Results are saved as structured Markdown for easy reading
 
 ## Troubleshooting
 
 ### "Chrome profile not found"
-- Ensure Chrome is installed in the default location
-- Check that your Chrome profile path is correct for your OS
+Ensure Chrome is installed at `/Applications/Google Chrome.app`
 
 ### "Login required"
-- Make sure you're logged into Twitter/X in your Chrome browser before running
-- The script uses your existing session cookies from the Chrome profile
+Make sure you're logged into Twitter/X in Chrome before running
 
 ### "Browser already in use"
-- Close all Chrome windows before running the script
-- Only one instance can use the Chrome profile at a time
+Close all Chrome windows before running the script
 
 ## Project Structure
 
 ```
 LlmAgentBrowser/
 ├── twitter_tweet_fetcher.py  # Main demo script
-├── requirements.txt          # Python dependencies
-├── .env.example             # Template for API keys
-├── .env                     # Your API keys (not in git)
-└── README.md                # This file
+├── pyproject.toml            # Project config & dependencies (uv)
+├── .env.example              # Template for API keys
+├── .env                      # Your API keys (git-ignored)
+├── .gitignore
+├── README.md
+└── output/                   # Generated Markdown files
+    └── tweets_*.md
 ```
 
 ## References
 
 - [browser-use Documentation](https://docs.browser-use.com/)
 - [browser-use GitHub](https://github.com/browser-use/browser-use)
-- [Supported Models](https://docs.browser-use.com/supported-models)
+- [uv Documentation](https://docs.astral.sh/uv/)

@@ -4,7 +4,7 @@ Twitter/X Tweet Fetcher Demo using Browser-Use
 This demo compares different LLM models' ability to:
 1. Open Twitter/X timeline using your logged-in Chrome profile
 2. Fetch and extract tweet content from the timeline
-3. Print out the tweets for evaluation
+3. Save tweets as structured Markdown
 
 Supported LLM Models:
 - ChatBrowserUse (Browser-Use Cloud)
@@ -13,8 +13,8 @@ Supported LLM Models:
 - OpenAI GPT-5.2
 
 Usage:
-    python twitter_tweet_fetcher.py --model <model_name>
-    python twitter_tweet_fetcher.py --all  # Run all models sequentially for comparison
+    uv run python twitter_tweet_fetcher.py --model <model_name>
+    uv run python twitter_tweet_fetcher.py --all
 
 Models:
     browser-use, gemini, claude, openai, all
@@ -22,20 +22,29 @@ Models:
 
 import asyncio
 import argparse
+import json
 import os
-import platform
+import re
 import sys
 import time
-from typing import Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
+from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
-# Load environment variables
 load_dotenv()
 
-# Color codes for terminal output
+# macOS Chrome paths
+CHROME_EXECUTABLE = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+CHROME_USER_DATA_DIR = os.path.expanduser("~/Library/Application Support/Google/Chrome")
+CHROME_PROFILE = "Default"
+
+# Output directory for Markdown files
+OUTPUT_DIR = Path("output")
+
+
 class Colors:
     HEADER = '\033[95m'
     BLUE = '\033[94m'
@@ -48,101 +57,62 @@ class Colors:
 
 
 @dataclass
+class Tweet:
+    """Represents a single tweet"""
+    author: str
+    handle: str
+    content: str
+    link: str
+    likes: Optional[int] = None
+    retweets: Optional[int] = None
+    replies: Optional[int] = None
+    timestamp: Optional[str] = None
+
+
+@dataclass
 class ModelResult:
     """Stores the result of running a model"""
     model_name: str
-    tweets: list[str]
-    execution_time: float
-    success: bool
+    model_type: str
+    tweets: list[Tweet] = field(default_factory=list)
+    raw_output: str = ""
+    execution_time: float = 0.0
+    success: bool = False
     error_message: Optional[str] = None
 
 
-def get_chrome_paths() -> tuple[str, str, str]:
-    """Get Chrome executable path, user data dir, and profile based on OS"""
-    system = platform.system()
-
-    if system == "Darwin":  # macOS
-        executable = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
-        user_data_dir = os.path.expanduser("~/Library/Application Support/Google/Chrome")
-        profile = "Default"
-    elif system == "Windows":
-        # Common Windows paths
-        executable = os.path.expandvars(r"%PROGRAMFILES%\Google\Chrome\Application\chrome.exe")
-        if not os.path.exists(executable):
-            executable = os.path.expandvars(r"%PROGRAMFILES(X86)%\Google\Chrome\Application\chrome.exe")
-        if not os.path.exists(executable):
-            executable = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\Application\chrome.exe")
-        user_data_dir = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
-        profile = "Default"
-    else:  # Linux
-        executable = "/usr/bin/google-chrome"
-        if not os.path.exists(executable):
-            executable = "/usr/bin/chromium-browser"
-        if not os.path.exists(executable):
-            executable = "/usr/bin/chromium"
-        user_data_dir = os.path.expanduser("~/.config/google-chrome")
-        if not os.path.exists(user_data_dir):
-            user_data_dir = os.path.expanduser("~/.config/chromium")
-        profile = "Default"
-
-    return executable, user_data_dir, profile
-
-
 def print_header(text: str) -> None:
-    """Print a styled header"""
     print(f"\n{Colors.BOLD}{Colors.HEADER}{'='*60}{Colors.ENDC}")
     print(f"{Colors.BOLD}{Colors.HEADER}{text.center(60)}{Colors.ENDC}")
     print(f"{Colors.BOLD}{Colors.HEADER}{'='*60}{Colors.ENDC}\n")
 
 
-def print_model_info(model_name: str) -> None:
-    """Print model information"""
-    print(f"{Colors.CYAN}[Model]{Colors.ENDC} {Colors.BOLD}{model_name}{Colors.ENDC}")
-
-
-def print_tweet(index: int, content: str) -> None:
-    """Print a single tweet"""
-    print(f"\n{Colors.GREEN}--- Tweet #{index} ---{Colors.ENDC}")
-    print(content)
+def print_info(message: str) -> None:
+    print(f"{Colors.YELLOW}[INFO]{Colors.ENDC} {message}")
 
 
 def print_error(message: str) -> None:
-    """Print error message"""
     print(f"{Colors.RED}[ERROR]{Colors.ENDC} {message}")
 
 
 def print_success(message: str) -> None:
-    """Print success message"""
     print(f"{Colors.GREEN}[SUCCESS]{Colors.ENDC} {message}")
 
 
 def get_llm(model_type: str):
-    """
-    Get the LLM instance based on model type.
-
-    Args:
-        model_type: One of 'browser-use', 'gemini', 'claude', 'openai'
-
-    Returns:
-        LLM instance configured for the specified model
-    """
+    """Get the LLM instance based on model type."""
     if model_type == "browser-use":
         from browser_use import ChatBrowserUse
-
         api_key = os.getenv("BROWSER_USE_API_KEY")
         if not api_key:
             raise ValueError("BROWSER_USE_API_KEY environment variable is required")
-
         return ChatBrowserUse(), "Browser-Use Cloud"
 
     elif model_type == "gemini":
         from langchain_google_genai import ChatGoogleGenerativeAI
-
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             raise ValueError("GOOGLE_API_KEY environment variable is required")
-
-        # Using Gemini 2.5 Pro - the latest stable version
         return ChatGoogleGenerativeAI(
             model="gemini-2.5-pro",
             google_api_key=api_key,
@@ -151,12 +121,9 @@ def get_llm(model_type: str):
 
     elif model_type == "claude":
         from langchain_anthropic import ChatAnthropic
-
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
             raise ValueError("ANTHROPIC_API_KEY environment variable is required")
-
-        # Using Claude Opus 4.5
         return ChatAnthropic(
             model="claude-opus-4-5-20251101",
             anthropic_api_key=api_key,
@@ -165,12 +132,9 @@ def get_llm(model_type: str):
 
     elif model_type == "openai":
         from langchain_openai import ChatOpenAI
-
         api_key = os.getenv("OPENAI_API_KEY")
         if not api_key:
             raise ValueError("OPENAI_API_KEY environment variable is required")
-
-        # Using GPT-5.2
         return ChatOpenAI(
             model="gpt-5.2",
             openai_api_key=api_key,
@@ -181,156 +145,285 @@ def get_llm(model_type: str):
         raise ValueError(f"Unknown model type: {model_type}")
 
 
+def parse_tweets_from_output(raw_output: str) -> list[Tweet]:
+    """
+    Parse the raw LLM output into structured Tweet objects.
+    The LLM is instructed to return JSON, but we handle fallback parsing.
+    """
+    tweets = []
+
+    # Try to parse as JSON first
+    try:
+        # Look for JSON array in the output
+        json_match = re.search(r'\[[\s\S]*\]', raw_output)
+        if json_match:
+            data = json.loads(json_match.group())
+            for item in data:
+                tweet = Tweet(
+                    author=item.get("author", "Unknown"),
+                    handle=item.get("handle", ""),
+                    content=item.get("content", item.get("text", "")),
+                    link=item.get("link", item.get("url", "")),
+                    likes=item.get("likes"),
+                    retweets=item.get("retweets"),
+                    replies=item.get("replies"),
+                    timestamp=item.get("timestamp"),
+                )
+                tweets.append(tweet)
+            return tweets
+    except json.JSONDecodeError:
+        pass
+
+    # Fallback: try to parse numbered format
+    # Pattern: looks for tweet blocks separated by numbers or dashes
+    tweet_blocks = re.split(r'\n(?=\d+[\.\):]|\-{3,}|Tweet #)', raw_output)
+
+    for block in tweet_blocks:
+        if not block.strip():
+            continue
+
+        # Extract author/handle
+        author_match = re.search(r'@(\w+)', block)
+        handle = f"@{author_match.group(1)}" if author_match else ""
+
+        # Try to find author name
+        name_match = re.search(r'(?:Author|Name|From):\s*([^\n@]+)', block, re.IGNORECASE)
+        author = name_match.group(1).strip() if name_match else handle
+
+        # Extract content
+        content_match = re.search(r'(?:Content|Text|Tweet):\s*(.+?)(?=\n(?:Link|Likes|Retweets|$))', block, re.IGNORECASE | re.DOTALL)
+        content = content_match.group(1).strip() if content_match else ""
+
+        # If no content found, use the whole block minus metadata
+        if not content:
+            lines = block.strip().split('\n')
+            content_lines = [l for l in lines if not re.match(r'^(Author|Name|Handle|Link|Likes|Retweets|Replies|@):', l, re.IGNORECASE)]
+            content = ' '.join(content_lines).strip()
+
+        # Extract link
+        link_match = re.search(r'(?:Link|URL):\s*(https?://[^\s]+)', block, re.IGNORECASE)
+        if not link_match:
+            link_match = re.search(r'(https?://(?:twitter\.com|x\.com)/\w+/status/\d+)', block)
+        link = link_match.group(1) if link_match else ""
+
+        if content or author:
+            tweets.append(Tweet(
+                author=author or "Unknown",
+                handle=handle,
+                content=content,
+                link=link,
+            ))
+
+    return tweets
+
+
+def save_tweets_to_markdown(result: ModelResult, output_dir: Path) -> Path:
+    """Save the tweets to a structured Markdown file."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_model_name = result.model_type.replace(" ", "_").replace("-", "_")
+    filename = f"tweets_{safe_model_name}_{timestamp}.md"
+    filepath = output_dir / filename
+
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(f"# Twitter/X Timeline Tweets\n\n")
+        f.write(f"**Model:** {result.model_name}\n\n")
+        f.write(f"**Fetched at:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+        f.write(f"**Execution time:** {result.execution_time:.2f} seconds\n\n")
+        f.write("---\n\n")
+
+        if result.tweets:
+            for i, tweet in enumerate(result.tweets, 1):
+                f.write(f"## Tweet {i}\n\n")
+                f.write(f"| Field | Value |\n")
+                f.write(f"|-------|-------|\n")
+                f.write(f"| **Author** | {tweet.author} |\n")
+                if tweet.handle:
+                    f.write(f"| **Handle** | {tweet.handle} |\n")
+                if tweet.link:
+                    f.write(f"| **Link** | [{tweet.link}]({tweet.link}) |\n")
+                if tweet.timestamp:
+                    f.write(f"| **Time** | {tweet.timestamp} |\n")
+                f.write("\n")
+
+                f.write(f"### Content\n\n")
+                f.write(f"> {tweet.content}\n\n")
+
+                if tweet.likes or tweet.retweets or tweet.replies:
+                    f.write(f"**Engagement:** ")
+                    metrics = []
+                    if tweet.likes:
+                        metrics.append(f"{tweet.likes} likes")
+                    if tweet.retweets:
+                        metrics.append(f"{tweet.retweets} retweets")
+                    if tweet.replies:
+                        metrics.append(f"{tweet.replies} replies")
+                    f.write(" | ".join(metrics) + "\n\n")
+
+                f.write("---\n\n")
+        else:
+            f.write("*No tweets were extracted.*\n\n")
+            if result.raw_output:
+                f.write("## Raw Output\n\n")
+                f.write("```\n")
+                f.write(result.raw_output)
+                f.write("\n```\n")
+
+        if result.error_message:
+            f.write(f"\n## Error\n\n")
+            f.write(f"```\n{result.error_message}\n```\n")
+
+    return filepath
+
+
 async def fetch_tweets_with_model(model_type: str, num_tweets: int = 5) -> ModelResult:
-    """
-    Fetch tweets from Twitter/X timeline using the specified LLM model.
-
-    Args:
-        model_type: The type of model to use
-        num_tweets: Number of tweets to fetch (default 5)
-
-    Returns:
-        ModelResult containing the fetched tweets and execution info
-    """
+    """Fetch tweets from Twitter/X timeline using the specified LLM model."""
     from browser_use import Agent, Browser
 
     start_time = time.time()
-    tweets = []
-    error_message = None
-    success = False
+    result = ModelResult(model_name="", model_type=model_type)
 
     try:
-        # Get LLM instance
         llm, model_name = get_llm(model_type)
-        print_model_info(model_name)
+        result.model_name = model_name
+        print(f"{Colors.CYAN}[Model]{Colors.ENDC} {Colors.BOLD}{model_name}{Colors.ENDC}")
 
-        # Get Chrome paths for the current OS
-        executable, user_data_dir, profile = get_chrome_paths()
+        print_info(f"Chrome: {CHROME_EXECUTABLE}")
+        print_info(f"Profile: {CHROME_PROFILE}")
+        print_info("Please close all Chrome windows before running...")
 
-        print(f"{Colors.YELLOW}[INFO]{Colors.ENDC} Chrome executable: {executable}")
-        print(f"{Colors.YELLOW}[INFO]{Colors.ENDC} User data dir: {user_data_dir}")
-        print(f"{Colors.YELLOW}[INFO]{Colors.ENDC} Profile: {profile}")
-        print(f"{Colors.YELLOW}[INFO]{Colors.ENDC} Please close all Chrome windows before running...")
-
-        # Create browser with user's Chrome profile
         browser = Browser(
-            executable_path=executable,
-            user_data_dir=user_data_dir,
-            profile_directory=profile,
+            executable_path=CHROME_EXECUTABLE,
+            user_data_dir=CHROME_USER_DATA_DIR,
+            profile_directory=CHROME_PROFILE,
         )
 
-        # Define the task for fetching tweets
+        # Task instructs LLM to return structured JSON
         task = f"""
-        Go to Twitter/X (https://x.com or https://twitter.com) and:
-        1. Wait for the timeline to fully load (you should be logged in via the Chrome profile)
-        2. Scroll through the timeline to see recent tweets
-        3. Extract the content of the first {num_tweets} tweets you see
-        4. For each tweet, include:
-           - The author's name/handle
-           - The tweet text content
-           - Any engagement metrics visible (likes, retweets, replies) if easily accessible
-        5. Return the tweets in a clear, numbered format
+        Go to Twitter/X (https://x.com) and fetch tweets from the timeline.
 
-        If you encounter a login page, the Chrome profile may not be logged in - report this as an error.
+        Instructions:
+        1. Wait for the timeline to fully load (you should be logged in via Chrome profile)
+        2. Scroll to see recent tweets
+        3. Extract exactly {num_tweets} tweets
+
+        For each tweet, extract:
+        - author: The display name of the tweet author
+        - handle: The @username (e.g., @elonmusk)
+        - content: The full tweet text
+        - link: The direct URL to the tweet (format: https://x.com/username/status/id)
+        - likes: Number of likes (if visible)
+        - retweets: Number of retweets (if visible)
+        - timestamp: When the tweet was posted (if visible)
+
+        IMPORTANT: Return the data as a JSON array like this:
+        [
+            {{
+                "author": "Display Name",
+                "handle": "@username",
+                "content": "The tweet text...",
+                "link": "https://x.com/username/status/123456789",
+                "likes": 100,
+                "retweets": 50,
+                "timestamp": "2h"
+            }}
+        ]
+
+        If you see a login page, report "LOGIN_REQUIRED" as an error.
         """
 
-        # Create and run the agent
         agent = Agent(
             task=task,
             llm=llm,
             browser=browser,
         )
 
-        print(f"{Colors.YELLOW}[INFO]{Colors.ENDC} Starting agent to fetch tweets...")
+        print_info("Starting agent to fetch tweets...")
+        history = await agent.run(max_steps=25)
 
-        # Run the agent with a reasonable step limit
-        history = await agent.run(max_steps=20)
+        # Extract result from agent history
+        raw_output = ""
+        if history:
+            if hasattr(history, 'final_result') and history.final_result:
+                raw_output = history.final_result
+            elif hasattr(history, 'result') and history.result:
+                raw_output = str(history.result)
+            elif hasattr(history, 'actions') and history.actions:
+                for action in reversed(history.actions):
+                    if hasattr(action, 'result') and action.result:
+                        raw_output = str(action.result)
+                        break
 
-        # Extract the final result from agent history
-        if history and hasattr(history, 'final_result'):
-            result_text = history.final_result
-            if result_text:
-                # Parse tweets from the result
-                tweets = [result_text]  # Store the full result for now
-                success = True
-                print_success(f"Successfully fetched tweets using {model_name}")
+        result.raw_output = raw_output
+
+        if raw_output:
+            result.tweets = parse_tweets_from_output(raw_output)
+            result.success = len(result.tweets) > 0
+            if result.success:
+                print_success(f"Extracted {len(result.tweets)} tweets")
+            else:
+                result.error_message = "Could not parse tweets from output"
+                print_error(result.error_message)
         else:
-            # Try to get result from the last action
-            if history and hasattr(history, 'actions') and history.actions:
-                last_action = history.actions[-1]
-                if hasattr(last_action, 'result'):
-                    tweets = [str(last_action.result)]
-                    success = True
-
-            if not success:
-                error_message = "No tweets found in agent response"
-                print_error(error_message)
+            result.error_message = "No output from agent"
+            print_error(result.error_message)
 
     except Exception as e:
-        error_message = str(e)
-        print_error(f"Failed to fetch tweets: {error_message}")
+        result.error_message = str(e)
+        print_error(f"Failed: {e}")
 
-    execution_time = time.time() - start_time
-
-    return ModelResult(
-        model_name=model_name if 'model_name' in dir() else model_type,
-        tweets=tweets,
-        execution_time=execution_time,
-        success=success,
-        error_message=error_message
-    )
+    result.execution_time = time.time() - start_time
+    return result
 
 
-def print_result(result: ModelResult) -> None:
-    """Print the result of a model run"""
-    print_header(f"Results: {result.model_name}")
-
-    print(f"{Colors.CYAN}Execution Time:{Colors.ENDC} {result.execution_time:.2f} seconds")
+def print_result_summary(result: ModelResult) -> None:
+    """Print a summary of the result."""
+    print(f"\n{Colors.CYAN}Execution Time:{Colors.ENDC} {result.execution_time:.2f}s")
     print(f"{Colors.CYAN}Status:{Colors.ENDC} {'Success' if result.success else 'Failed'}")
-
-    if result.error_message:
-        print(f"{Colors.CYAN}Error:{Colors.ENDC} {result.error_message}")
+    print(f"{Colors.CYAN}Tweets Found:{Colors.ENDC} {len(result.tweets)}")
 
     if result.tweets:
-        print(f"\n{Colors.BOLD}Fetched Content:{Colors.ENDC}")
-        for i, tweet in enumerate(result.tweets, 1):
-            print_tweet(i, tweet)
-    else:
-        print(f"\n{Colors.YELLOW}No tweets were fetched{Colors.ENDC}")
+        print(f"\n{Colors.BOLD}Preview:{Colors.ENDC}")
+        for i, tweet in enumerate(result.tweets[:3], 1):  # Show first 3
+            content_preview = tweet.content[:80] + "..." if len(tweet.content) > 80 else tweet.content
+            print(f"  {i}. {tweet.handle}: {content_preview}")
+        if len(result.tweets) > 3:
+            print(f"  ... and {len(result.tweets) - 3} more")
 
 
 def print_comparison(results: list[ModelResult]) -> None:
-    """Print a comparison of all model results"""
-    print_header("Model Comparison Summary")
+    """Print a comparison table of all results."""
+    print_header("Model Comparison")
 
-    print(f"{'Model':<25} {'Status':<10} {'Time (s)':<12} {'Tweets':<10}")
-    print("-" * 60)
+    print(f"{'Model':<25} {'Status':<10} {'Time':<10} {'Tweets':<8}")
+    print("-" * 55)
 
-    for result in results:
-        status = "Success" if result.success else "Failed"
-        tweet_count = len(result.tweets) if result.tweets else 0
-        print(f"{result.model_name:<25} {status:<10} {result.execution_time:<12.2f} {tweet_count:<10}")
+    for r in results:
+        status = "OK" if r.success else "FAIL"
+        print(f"{r.model_name:<25} {status:<10} {r.execution_time:<10.2f} {len(r.tweets):<8}")
 
-    # Find the best performing model
-    successful_results = [r for r in results if r.success]
-    if successful_results:
-        fastest = min(successful_results, key=lambda x: x.execution_time)
-        print(f"\n{Colors.GREEN}Fastest successful model:{Colors.ENDC} {fastest.model_name} ({fastest.execution_time:.2f}s)")
+    successful = [r for r in results if r.success]
+    if successful:
+        fastest = min(successful, key=lambda x: x.execution_time)
+        most_tweets = max(successful, key=lambda x: len(x.tweets))
+        print(f"\n{Colors.GREEN}Fastest:{Colors.ENDC} {fastest.model_name} ({fastest.execution_time:.2f}s)")
+        print(f"{Colors.GREEN}Most tweets:{Colors.ENDC} {most_tweets.model_name} ({len(most_tweets.tweets)} tweets)")
 
 
 async def main():
     parser = argparse.ArgumentParser(
-        description="Fetch tweets from Twitter/X using different LLM models via browser-use"
+        description="Fetch tweets from Twitter/X using different LLM models"
     )
     parser.add_argument(
         "--model",
         choices=["browser-use", "gemini", "claude", "openai"],
-        help="LLM model to use for fetching tweets"
+        help="LLM model to use"
     )
     parser.add_argument(
         "--all",
         action="store_true",
-        help="Run all models sequentially for comparison"
+        help="Run all models for comparison"
     )
     parser.add_argument(
         "--tweets",
@@ -338,50 +431,75 @@ async def main():
         default=5,
         help="Number of tweets to fetch (default: 5)"
     )
+    parser.add_argument(
+        "--output",
+        type=str,
+        default="output",
+        help="Output directory for Markdown files (default: output)"
+    )
 
     args = parser.parse_args()
 
     if not args.model and not args.all:
         parser.print_help()
-        print(f"\n{Colors.YELLOW}Please specify --model <model_name> or --all{Colors.ENDC}")
+        print(f"\n{Colors.YELLOW}Please specify --model <name> or --all{Colors.ENDC}")
         sys.exit(1)
 
-    print_header("Twitter/X Tweet Fetcher Demo")
-    print(f"Timestamp: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    output_dir = Path(args.output)
+
+    print_header("Twitter/X Tweet Fetcher")
+    print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Tweets to fetch: {args.tweets}")
+    print(f"Output directory: {output_dir.absolute()}")
 
     results = []
+    saved_files = []
 
     if args.all:
-        # Run all models
         models = ["browser-use", "gemini", "claude", "openai"]
         for model in models:
             print_header(f"Testing: {model.upper()}")
             try:
                 result = await fetch_tweets_with_model(model, args.tweets)
                 results.append(result)
-                print_result(result)
+                print_result_summary(result)
+
+                # Save to Markdown
+                filepath = save_tweets_to_markdown(result, output_dir)
+                saved_files.append(filepath)
+                print_success(f"Saved to: {filepath}")
+
             except ValueError as e:
-                print_error(f"Skipping {model}: {str(e)}")
+                print_error(f"Skipping {model}: {e}")
                 results.append(ModelResult(
                     model_name=model,
-                    tweets=[],
-                    execution_time=0,
-                    success=False,
+                    model_type=model,
                     error_message=str(e)
                 ))
-            print("\n" + "="*60 + "\n")
 
-        # Print comparison
         print_comparison(results)
     else:
-        # Run single model
         result = await fetch_tweets_with_model(args.model, args.tweets)
         results.append(result)
-        print_result(result)
+        print_result_summary(result)
+
+        filepath = save_tweets_to_markdown(result, output_dir)
+        saved_files.append(filepath)
+        print_success(f"Saved to: {filepath}")
+
+    # Summary of saved files
+    if saved_files:
+        print_header("Output Files")
+        for f in saved_files:
+            print(f"  - {f}")
 
     return results
 
 
-if __name__ == "__main__":
+def main_cli():
+    """Entry point for the CLI."""
     asyncio.run(main())
+
+
+if __name__ == "__main__":
+    main_cli()
