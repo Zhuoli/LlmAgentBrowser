@@ -1,41 +1,24 @@
 # LLM Browser Agent Demo - Twitter/X Tweet Fetcher
 
-A demo project to evaluate different approaches for LLM-powered browser automation. Fetches tweets from your Twitter/X timeline and saves them as structured Markdown.
+A demo project using [agent-browser](https://github.com/vercel-labs/agent-browser) from Vercel Labs for LLM-powered browser automation. Fetches tweets from your Twitter/X timeline and saves them as structured Markdown.
 
 **Platform:** macOS (primary), Linux/Windows (partial support)
 
-## Browser Automation Approaches
+## Features
 
-This project implements **four different approaches** for browser automation:
+- **Ref-based element selection** (@e1, @e2) - optimal for LLM tool calling
+- **Session isolation** - run parallel browser sessions
+- **Headless or headed mode** - debug with visible browser window
+- **Multi-model support** - Claude, Gemini, or OpenAI
 
-| Approach | Close Chrome? | Setup | Key Feature | Recommended |
-|----------|---------------|-------|-------------|-------------|
-| **Browser MCP** | **No** | Chrome Extension + MCP | Existing login sessions | **Yes** |
-| **agent-browser** | N/A (own Chromium) | `npm install -g agent-browser` | Ref-based selection | For automation |
-| browser-use | Yes | Python library | Simple API | No |
-| Chrome DevTools MCP | Yes | MCP Server | Full DevTools | No |
+## Quick Start
 
-### Why Browser MCP is Recommended
+### 1. Install agent-browser
 
-Browser MCP uses a Chrome Extension that injects into your **running browser**, so:
-- No need to close Chrome windows
-- Uses your existing Twitter login session
-- Avoids bot detection (real browser fingerprint)
-- Works alongside your normal browsing
-
-### When to Use agent-browser
-
-[agent-browser](https://github.com/vercel-labs/agent-browser) from Vercel Labs is ideal for:
-- **Automation pipelines** where no existing session is needed
-- **LLM-optimal workflows** with ref-based element selection (@e1, @e2)
-- **Parallel browser sessions** with session isolation
-- **Headless operation** (or headed for debugging)
-
-## Quick Start (Browser MCP)
-
-### 1. Install Browser MCP Chrome Extension
-
-Install from [Chrome Web Store](https://chromewebstore.google.com/detail/browser-mcp-automate-your/bjfgambnhccakkhmkepdoekmckoijdlc)
+```bash
+npm install -g agent-browser
+agent-browser install  # Downloads Chromium (~200MB)
+```
 
 ### 2. Install Python Dependencies
 
@@ -50,42 +33,34 @@ cp .env.example .env
 # Edit .env and add your API keys
 ```
 
-### 4. Connect the Extension (IMPORTANT!)
-
-1. **Open Twitter/X** in a Chrome tab and make sure you're logged in
-2. **Click the Browser MCP extension icon** in your Chrome toolbar
-3. **Click "Connect"** in the extension popup
-
-> The extension must be connected to the tab you want to automate. You'll see a confirmation when connected.
-
-### 5. Run
+### 4. Run
 
 ```bash
-# Recommended: Browser MCP + Claude
-make bmcp-claude TWEETS=5
+# Run with Claude (default)
+make claude TWEETS=5
 
 # Or with other models
-make bmcp-gemini TWEETS=5
-make bmcp-openai TWEETS=5
+make gemini TWEETS=5
+make openai TWEETS=5
+
+# Run with visible browser (for debugging)
+make headed TWEETS=5
 ```
 
 ## Supported LLM Models
 
-| Model | Provider | Used By |
+| Model | Provider | Command |
 |-------|----------|---------|
-| Gemini 2.0 Flash | Google | Browser MCP, Chrome DevTools MCP, agent-browser |
-| Claude Sonnet 4 | Anthropic | Browser MCP, Chrome DevTools MCP, agent-browser |
-| GPT-4o | OpenAI | Browser MCP, Chrome DevTools MCP, agent-browser |
-| Gemini 3 Pro | Google | browser-use |
-| Claude Opus 4.5 | Anthropic | browser-use |
-| GPT-5.2 | OpenAI | browser-use |
+| Claude Sonnet 4 | Anthropic | `make claude` |
+| Gemini 2.0 Flash | Google | `make gemini` |
+| GPT-4o | OpenAI | `make openai` |
 
 ## Prerequisites
 
 - macOS / Linux / Windows
 - Python >= 3.11
+- Node.js (for agent-browser)
 - [uv](https://docs.astral.sh/uv/) package manager
-- Google Chrome with [Browser MCP Extension](https://chromewebstore.google.com/detail/browser-mcp-automate-your/bjfgambnhccakkhmkepdoekmckoijdlc)
 - API keys for the LLM providers you want to use
 
 ## Installation
@@ -96,12 +71,19 @@ git clone <repo-url>
 cd LlmAgentBrowser
 ```
 
-2. Install dependencies:
+2. Install agent-browser:
 ```bash
-uv sync
+make install-browser
+# Or manually:
+npm install -g agent-browser
+agent-browser install
 ```
 
-3. Install Browser MCP Chrome Extension from [Chrome Web Store](https://chromewebstore.google.com/detail/browser-mcp-automate-your/bjfgambnhccakkhmkepdoekmckoijdlc)
+3. Install Python dependencies:
+```bash
+make install
+# Or: uv sync
+```
 
 4. Set up environment variables:
 ```bash
@@ -127,62 +109,27 @@ OPENAI_API_KEY=your-openai-api-key
 
 ## Usage
 
-### Browser MCP (Recommended)
-
-**No need to close Chrome!** Just make sure you're logged into Twitter/X.
+### Basic Commands
 
 ```bash
-# Using Claude (recommended)
-make bmcp-claude TWEETS=5
+# Run with Claude (default)
+make run
 
-# Using Gemini
-make bmcp-gemini TWEETS=5
-
-# Using OpenAI
-make bmcp-openai TWEETS=5
+# Run with specific model
+make claude TWEETS=5
+make gemini TWEETS=5
+make openai TWEETS=5
 
 # Compare all models
-make bmcp-all TWEETS=5
+make run-all TWEETS=5
 ```
 
-### agent-browser (Vercel Labs)
-
-Uses Playwright/Chromium with ref-based element selection. Great for automation pipelines.
+### Debug Mode (Visible Browser)
 
 ```bash
-# Install agent-browser (one-time setup)
-make ab-install
-
-# Run with different models
-make ab-claude TWEETS=5
-make ab-gemini TWEETS=5
-make ab-openai TWEETS=5
-
-# Run with visible browser window (for debugging)
-make ab-headed TWEETS=5
-
-# Compare all models
-make ab-all TWEETS=5
-```
-
-### browser-use (Legacy)
-
-**Requires closing all Chrome windows first.**
-
-```bash
-make run-gemini TWEETS=5
-make run-claude TWEETS=5
-make run-openai TWEETS=5
-```
-
-### Chrome DevTools MCP (Alternative)
-
-**Requires closing all Chrome windows first.**
-
-```bash
-make mcp-gemini TWEETS=5
-make mcp-claude TWEETS=5
-make mcp-openai TWEETS=5
+# Run with visible browser window
+make headed TWEETS=5
+make headed-gemini TWEETS=5
 ```
 
 ### All Available Commands
@@ -205,18 +152,18 @@ Tweets are saved as structured Markdown files in the `output/` directory:
 
 ```
 output/
-  tweets_browsermcp_claude_20250112_143022.md
-  tweets_browsermcp_gemini_20250112_143156.md
+  tweets_agentbrowser_claude_20250112_143022.md
+  tweets_agentbrowser_gemini_20250112_143156.md
   ...
 ```
 
 ### Example Output:
 
 ```markdown
-# Twitter/X Timeline Tweets (Browser MCP)
+# Twitter/X Timeline Tweets (agent-browser)
 
 **Model:** Claude Sonnet 4
-**Method:** Browser MCP (Chrome Extension)
+**Method:** agent-browser (Playwright/Chromium)
 **Fetched at:** 2025-01-12 14:30:22
 **Execution time:** 12.45 seconds
 **Tool calls:** 8
@@ -240,33 +187,7 @@ output/
 
 ## How It Works
 
-### Browser MCP Architecture
-
-```
-┌─────────────────┐     MCP Protocol      ┌─────────────────┐
-│   LLM Client    │◄────────────────────►│  MCP Server     │
-│ (Claude/Gemini) │                       │ (npx @browsermcp)│
-└─────────────────┘                       └────────┬────────┘
-                                                   │
-                                          Chrome Extension API
-                                                   │
-                                          ┌────────▼────────┐
-                                          │ Browser MCP     │
-                                          │ Chrome Extension│
-                                          └────────┬────────┘
-                                                   │
-                                          ┌────────▼────────┐
-                                          │ Running Chrome  │
-                                          │ (your tabs!)    │
-                                          └─────────────────┘
-```
-
-1. **Browser MCP Extension** injects into your running Chrome
-2. **MCP Server** connects to the extension via Chrome Extension API
-3. **LLM** orchestrates browser actions via MCP tools
-4. **Your existing login session** is preserved (Twitter, etc.)
-
-### agent-browser Architecture
+### Architecture
 
 ```
 ┌─────────────────┐                       ┌─────────────────┐
@@ -290,19 +211,7 @@ output/
 3. **Daemon** manages Playwright browser instance
 4. **Ref-based selection** (@e1, @e2) from accessibility snapshots for LLM-optimal interaction
 
-### Available Browser MCP Tools
-
-| Tool | Description |
-|------|-------------|
-| `browser_navigate` | Navigate to a URL |
-| `browser_click` | Click an element |
-| `browser_type` | Type text |
-| `browser_press_key` | Press keyboard key |
-| `browser_snapshot` | Get page content |
-| `browser_screenshot` | Take screenshot |
-| `browser_wait` | Wait for duration |
-
-### Available agent-browser Tools
+### Available Tools
 
 | Tool | Description |
 |------|-------------|
@@ -323,13 +232,8 @@ output/
 
 ```
 LlmAgentBrowser/
-├── twitter_fetcher_browsermcp.py     # Browser MCP implementation (RECOMMENDED)
-├── twitter_fetcher_agentbrowser.py   # agent-browser implementation
+├── twitter_fetcher_agentbrowser.py   # Main implementation
 ├── agent_browser_client.py           # Python wrapper for agent-browser CLI
-├── twitter_fetcher_mcp.py            # Chrome DevTools MCP implementation
-├── twitter_tweet_fetcher.py          # browser-use implementation (legacy)
-├── design.md                         # Architecture design document
-├── PLAN_agent_browser_refactor.md    # agent-browser integration plan
 ├── Makefile                          # Build targets
 ├── pyproject.toml                    # Dependencies (uv)
 ├── .env.example                      # API key template
@@ -339,48 +243,35 @@ LlmAgentBrowser/
 
 ## Troubleshooting
 
-### "No connection to browser extension" / Extension not working
-
-1. Install the extension from [Chrome Web Store](https://chromewebstore.google.com/detail/browser-mcp-automate-your/bjfgambnhccakkhmkepdoekmckoijdlc)
-2. **Open the tab** you want to automate (e.g., Twitter/X)
-3. **Click the Browser MCP extension icon** in Chrome toolbar
-4. **Click "Connect"** in the popup - this is required before each session!
-5. Then run your `make bmcp-*` command
-
-### "Login required" / "Not logged in"
-
-Make sure you're logged into Twitter/X in Chrome before running the script.
-
-### "Rate limit exceeded"
-
-Wait a few minutes and try again, or switch to a different LLM provider.
-
-### browser-use / Chrome DevTools MCP: "Browser already in use"
-
-These approaches require closing all Chrome windows first. Use **Browser MCP** instead to avoid this.
-
-### agent-browser: "agent-browser is not installed"
+### "agent-browser is not installed"
 
 Install agent-browser and Chromium:
 ```bash
-make ab-install
+make install-browser
 # Or manually:
 npm install -g agent-browser
 agent-browser install
 ```
 
-### agent-browser: Twitter login required
+### Twitter login required
 
-agent-browser uses a fresh Chromium browser without your existing sessions. Options:
-1. Use `--headed` mode to manually login: `make ab-headed`
-2. Use Browser MCP instead if you want to use existing login
+agent-browser uses a fresh Chromium browser without your existing sessions. Use `--headed` mode to manually login:
+```bash
+make headed
+```
+
+### "Rate limit exceeded"
+
+Wait a few minutes and try again, or switch to a different LLM provider.
+
+### Command timeout
+
+Increase the timeout by setting `LOG_LEVEL=DEBUG` to see what's happening:
+```bash
+make claude LOG_LEVEL=DEBUG
+```
 
 ## References
 
-- [Browser MCP](https://browsermcp.io/) - Chrome Extension + MCP Server
 - [agent-browser](https://github.com/vercel-labs/agent-browser) - Vercel Labs headless browser for AI agents
-- [Chrome MCP Server](https://github.com/hangwin/mcp-chrome) - Alternative with more tools
-- [browser-use](https://github.com/browser-use/browser-use) - Python browser automation
-- [Chrome DevTools MCP](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo) - Official Anthropic MCP
-- [Model Context Protocol](https://modelcontextprotocol.io/) - MCP specification
 - [uv Documentation](https://docs.astral.sh/uv/) - Python package manager
