@@ -9,7 +9,7 @@ A demo project to evaluate different LLM models using [browser-use](https://gith
 | Model | Provider | Model ID |
 |-------|----------|----------|
 | ChatBrowserUse | Browser-Use Cloud | Built-in |
-| Gemini 2.5 Pro | Google | `gemini-2.5-pro` |
+| Gemini 3 Pro | Google | `gemini-3-pro-preview` |
 | Claude Opus 4.5 | Anthropic | `claude-opus-4-5-20251101` |
 | GPT-5.2 | OpenAI | `gpt-5.2` |
 
@@ -118,7 +118,7 @@ output/
 ```markdown
 # Twitter/X Timeline Tweets
 
-**Model:** Google Gemini 2.5 Pro
+**Model:** Google Gemini 3 Pro
 **Fetched at:** 2025-01-12 14:30:22
 **Execution time:** 45.32 seconds
 

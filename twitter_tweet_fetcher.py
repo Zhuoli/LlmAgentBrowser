@@ -114,10 +114,10 @@ def get_llm(model_type: str):
         if not api_key:
             raise ValueError("GOOGLE_API_KEY environment variable is required")
         return ChatGoogleGenerativeAI(
-            model="gemini-2.5-pro",
+            model="gemini-3-pro-preview",
             google_api_key=api_key,
             temperature=0.0
-        ), "Google Gemini 2.5 Pro"
+        ), "Google Gemini 3 Pro"
 
     elif model_type == "claude":
         from langchain_anthropic import ChatAnthropic
