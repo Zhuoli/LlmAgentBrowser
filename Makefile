@@ -1,5 +1,4 @@
-.PHONY: help install run run-all gemini claude openai headed headed-gemini clean clean-logs clean-output
-.PHONY: chrome chrome-gemini chrome-openai
+.PHONY: help install run run-all gemini claude openai headed headed-gemini clean clean-logs clean-output chrome chrome-gemini chrome-openai
 
 # Configuration
 TWEETS ?= 5
@@ -32,10 +31,8 @@ help: ## Show this help message
 	@echo "  make claude TWEETS=10        # Fresh browser with Claude"
 	@echo "  make headed                  # Fresh browser with visible window"
 
-install: ## Install dependencies using uv
+install: ## Install all dependencies (Python + agent-browser)
 	uv sync
-
-install-browser: ## Install agent-browser CLI and Chromium
 	npm install -g agent-browser
 	agent-browser install
 

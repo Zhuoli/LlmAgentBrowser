@@ -14,27 +14,22 @@ A demo project using [agent-browser](https://github.com/vercel-labs/agent-browse
 
 ## Quick Start
 
-### 1. Install agent-browser
+### 1. Install All Dependencies
 
 ```bash
-npm install -g agent-browser
-agent-browser install  # Downloads Chromium (~200MB)
+make install
 ```
 
-### 2. Install Python Dependencies
+This installs both Python dependencies and agent-browser (downloads Chromium ~200MB).
 
-```bash
-uv sync
-```
-
-### 3. Set up API Keys
+### 2. Set up API Keys
 
 ```bash
 cp .env.example .env
 # Edit .env and add your API keys
 ```
 
-### 4. Run with Your Chrome Profile (Recommended)
+### 3. Run with Your Chrome Profile (Recommended)
 
 Uses your existing Chrome login sessions - no need to login again!
 
@@ -84,21 +79,12 @@ git clone <repo-url>
 cd LlmAgentBrowser
 ```
 
-2. Install agent-browser:
-```bash
-make install-browser
-# Or manually:
-npm install -g agent-browser
-agent-browser install
-```
-
-3. Install Python dependencies:
+2. Install all dependencies:
 ```bash
 make install
-# Or: uv sync
 ```
 
-4. Set up environment variables:
+3. Set up environment variables:
 ```bash
 cp .env.example .env
 # Edit .env and add your API keys
@@ -294,12 +280,9 @@ LlmAgentBrowser/
 
 ### "agent-browser is not installed"
 
-Install agent-browser and Chromium:
+Run the install command to install all dependencies:
 ```bash
-make install-browser
-# Or manually:
-npm install -g agent-browser
-agent-browser install
+make install
 ```
 
 ### Chrome profile: "Browser already in use"
