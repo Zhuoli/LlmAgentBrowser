@@ -237,9 +237,18 @@ async def extract_tweets_direct(page, num_tweets: int = 5, num_scrolls: int = 3)
     if logger:
         logger.info(f"Navigating to Twitter/X...")
 
-    # Navigate to Twitter home
-    await page.goto("https://x.com/home", wait_until="networkidle")
-    await page.wait_for_timeout(3000)  # Wait for dynamic content
+    # Navigate to Twitter home (use domcontentloaded - networkidle times out on Twitter)
+    await page.goto("https://x.com/home", wait_until="domcontentloaded", timeout=60000)
+
+    # Wait for tweets to appear (this is more reliable than networkidle)
+    if logger:
+        logger.info("Waiting for tweets to load...")
+    try:
+        await page.wait_for_selector('article[data-testid="tweet"]', timeout=30000)
+    except Exception:
+        if logger:
+            logger.warning("Tweets not found yet, waiting longer...")
+        await page.wait_for_timeout(5000)
 
     if logger:
         logger.info(f"Page loaded. Scrolling {num_scrolls} times to load more tweets...")
@@ -251,12 +260,8 @@ async def extract_tweets_direct(page, num_tweets: int = 5, num_scrolls: int = 3)
         if logger:
             logger.info(f"Scroll {i + 1}/{num_scrolls} completed")
 
-    # Wait for tweets to be visible
-    try:
-        await page.wait_for_selector('article[data-testid="tweet"]', timeout=10000)
-    except Exception:
-        if logger:
-            logger.warning("No tweets found with selector, trying to continue anyway")
+    # Final wait for any lazy-loaded content
+    await page.wait_for_timeout(1000)
 
     # Extract tweets using JavaScript
     js_code = get_tweet_extraction_js(num_tweets)
@@ -387,7 +392,7 @@ class PlaywrightTools:
 
         if name == "navigate":
             url = arguments.get("url", "")
-            await self.page.goto(url, wait_until="networkidle")
+            await self.page.goto(url, wait_until="domcontentloaded", timeout=60000)
             return f"Navigated to {url}"
 
         elif name == "click":
