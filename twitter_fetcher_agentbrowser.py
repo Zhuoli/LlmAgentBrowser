@@ -1,14 +1,20 @@
 """
-Twitter/X Tweet Fetcher using Browser MCP + LLM
+Twitter/X Tweet Fetcher using agent-browser + LLM
 
-This implementation uses Browser MCP (Chrome Extension + MCP Server) for browser control.
-Key advantage: Works with your RUNNING Chrome browser - no need to close Chrome!
+This implementation uses Vercel Labs' agent-browser CLI for browser automation.
+agent-browser is optimized for AI agents with ref-based element selection.
 
 Architecture:
-1. Browser MCP Chrome Extension installed in your browser
-2. MCP Server (npx @browsermcp/mcp@latest) connects to the extension
-3. LLM orchestrates browser actions via MCP tools
-4. Your existing Twitter login session is preserved
+1. Python wrapper calls agent-browser CLI commands via subprocess
+2. agent-browser uses Playwright to control headless Chromium
+3. LLM orchestrates browser actions using tool calling
+4. Ref-based selection (@e1, @e2) from accessibility snapshots
+
+Key Features:
+- Ref-based element selection (optimal for LLMs)
+- Session isolation for parallel automation
+- 100+ browser automation commands
+- Headless by default (--headed for debugging)
 
 Supported LLM Models:
 - Google Gemini 2.0 Flash
@@ -16,13 +22,16 @@ Supported LLM Models:
 - OpenAI GPT-4o
 
 Prerequisites:
-- Install Browser MCP Chrome Extension from Chrome Web Store
-- Have Chrome running with Twitter/X logged in
+- npm install -g agent-browser
+- agent-browser install  # Downloads Chromium
+
+Note: Unlike Browser MCP, this uses a fresh browser instance.
+Twitter login credentials may be required (via env vars or manual login).
 
 Usage:
-    uv run python twitter_fetcher_browsermcp.py --model gemini
-    uv run python twitter_fetcher_browsermcp.py --model claude
-    uv run python twitter_fetcher_browsermcp.py --all
+    uv run python twitter_fetcher_agentbrowser.py --model gemini
+    uv run python twitter_fetcher_agentbrowser.py --model claude --headed
+    uv run python twitter_fetcher_agentbrowser.py --all
 """
 
 import argparse
@@ -30,6 +39,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import sys
 import time
 from dataclasses import dataclass, field
@@ -41,10 +51,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# MCP imports
-from mcp import ClientSession
-from mcp.client.stdio import stdio_client, StdioServerParameters
-from mcp.types import Tool
+from agent_browser_client import AgentBrowserClient, CommandResult
 
 # Logging setup
 LOG_DIR = Path("logs")
@@ -65,9 +72,9 @@ class Colors:
 def setup_logging(log_level: str = "INFO") -> logging.Logger:
     """Setup logging with both file and console handlers."""
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = LOG_DIR / f"browsermcp_{timestamp}.log"
+    log_file = LOG_DIR / f"agentbrowser_{timestamp}.log"
 
-    logger = logging.getLogger("browsermcp")
+    logger = logging.getLogger("agentbrowser")
     logger.setLevel(getattr(logging, log_level.upper(), logging.INFO))
     logger.handlers.clear()
 
@@ -82,7 +89,7 @@ def setup_logging(log_level: str = "INFO") -> logging.Logger:
 
     console_handler = logging.StreamHandler()
     console_handler.setLevel(logging.INFO)
-    console_formatter = logging.Formatter(f"{Colors.BLUE}[BrowserMCP]{Colors.ENDC} %(message)s")
+    console_formatter = logging.Formatter(f"{Colors.BLUE}[AgentBrowser]{Colors.ENDC} %(message)s")
     console_handler.setFormatter(console_formatter)
     logger.addHandler(console_handler)
 
@@ -177,35 +184,6 @@ def get_tweet_extraction_js(num_tweets: int = 5) -> str:
 """
 
 
-def mcp_tools_to_anthropic_format(tools: list[Tool]) -> list[dict]:
-    """Convert MCP tools to Anthropic tool format."""
-    anthropic_tools = []
-    for tool in tools:
-        anthropic_tool = {
-            "name": tool.name,
-            "description": tool.description or "",
-            "input_schema": tool.inputSchema if tool.inputSchema else {"type": "object", "properties": {}},
-        }
-        anthropic_tools.append(anthropic_tool)
-    return anthropic_tools
-
-
-def mcp_tools_to_openai_format(tools: list[Tool]) -> list[dict]:
-    """Convert MCP tools to OpenAI function calling format."""
-    openai_tools = []
-    for tool in tools:
-        openai_tool = {
-            "type": "function",
-            "function": {
-                "name": tool.name,
-                "description": tool.description or "",
-                "parameters": tool.inputSchema if tool.inputSchema else {"type": "object", "properties": {}},
-            }
-        }
-        openai_tools.append(openai_tool)
-    return openai_tools
-
-
 def clean_schema_for_gemini(schema: dict) -> dict:
     """Clean JSON Schema to remove fields not supported by Gemini."""
     unsupported_fields = {
@@ -231,78 +209,101 @@ def clean_schema_for_gemini(schema: dict) -> dict:
     return clean_recursive(schema)
 
 
-class BrowserMCPClient:
-    """Client that connects to Browser MCP server (Chrome Extension)."""
-
-    def __init__(self):
-        self.session: Optional[ClientSession] = None
-        self.tools: list[Tool] = []
-        self._read = None
-        self._write = None
-
-    async def connect(self):
-        """Connect to Browser MCP server via npx."""
-        server_params = StdioServerParameters(
-            command="npx",
-            args=["@browsermcp/mcp@latest"],
-            env={
-                **os.environ,
-                "PATH": os.environ.get("PATH", ""),
+def tools_to_anthropic_format(tools: list[dict]) -> list[dict]:
+    """Convert tools to Anthropic tool format."""
+    anthropic_tools = []
+    for tool in tools:
+        anthropic_tool = {
+            "name": tool["name"],
+            "description": tool["description"],
+            "input_schema": {
+                "type": "object",
+                "properties": tool["parameters"].get("properties", {}),
+                "required": tool["parameters"].get("required", [])
             }
-        )
-
-        if logger:
-            logger.info("Starting Browser MCP server (npx @browsermcp/mcp@latest)...")
-            logger.info("Connecting to Chrome Extension...")
-
-        self._stdio_context = stdio_client(server_params)
-        self._read, self._write = await self._stdio_context.__aenter__()
-
-        self.session = ClientSession(self._read, self._write)
-        await self.session.__aenter__()
-        await self.session.initialize()
-
-        tools_result = await self.session.list_tools()
-        self.tools = tools_result.tools
-
-        if logger:
-            logger.info(f"Connected! Available tools: {[t.name for t in self.tools]}")
-
-        return self
-
-    async def disconnect(self):
-        """Disconnect from MCP server."""
-        if self.session:
-            await self.session.__aexit__(None, None, None)
-        if hasattr(self, '_stdio_context'):
-            await self._stdio_context.__aexit__(None, None, None)
-
-    async def call_tool(self, name: str, arguments: dict) -> Any:
-        """Call an MCP tool and return the result."""
-        if not self.session:
-            raise RuntimeError("Not connected to MCP server")
-
-        if logger:
-            logger.debug(f"Calling tool: {name} with args: {arguments}")
-
-        result = await self.session.call_tool(name, arguments)
-
-        if logger:
-            logger.debug(f"Tool result: {result}")
-
-        return result
+        }
+        anthropic_tools.append(anthropic_tool)
+    return anthropic_tools
 
 
-class LLMOrchestrator:
-    """Orchestrates LLM with Browser MCP tools."""
+def tools_to_openai_format(tools: list[dict]) -> list[dict]:
+    """Convert tools to OpenAI function calling format."""
+    openai_tools = []
+    for tool in tools:
+        openai_tool = {
+            "type": "function",
+            "function": {
+                "name": tool["name"],
+                "description": tool["description"],
+                "parameters": tool["parameters"]
+            }
+        }
+        openai_tools.append(openai_tool)
+    return openai_tools
 
-    def __init__(self, model_type: str, mcp_client: BrowserMCPClient):
+
+class AgentBrowserOrchestrator:
+    """Orchestrates LLM with agent-browser tools."""
+
+    def __init__(self, model_type: str, browser: AgentBrowserClient):
         self.model_type = model_type
-        self.mcp_client = mcp_client
+        self.browser = browser
         self.tool_calls_count = 0
+        self.tools = browser.get_tool_definitions()
 
-    async def run_task(self, task: str, max_steps: int = 20) -> str:
-        """Run a task using LLM to orchestrate MCP tools."""
+    async def execute_tool(self, name: str, args: dict) -> str:
+        """Execute a browser tool and return result as string."""
+        self.tool_calls_count += 1
+
+        try:
+            if name == "browser_open":
+                result = await self.browser.open(args["url"])
+            elif name == "browser_snapshot":
+                result = await self.browser.snapshot(args.get("interactive", True))
+            elif name == "browser_click":
+                result = await self.browser.click(args["ref"])
+            elif name == "browser_type":
+                result = await self.browser.type(args["ref"], args["text"])
+            elif name == "browser_fill":
+                result = await self.browser.fill(args["ref"], args["text"])
+            elif name == "browser_scroll":
+                result = await self.browser.scroll(
+                    args.get("direction", "down"),
+                    args.get("amount", 500)
+                )
+            elif name == "browser_press":
+                result = await self.browser.press(args["key"])
+            elif name == "browser_wait":
+                result = await self.browser.wait(args["target"])
+            elif name == "browser_evaluate":
+                result = await self.browser.evaluate(args["script"])
+            elif name == "browser_get_text":
+                result = await self.browser.get_text(args.get("ref"))
+            elif name == "browser_screenshot":
+                result = await self.browser.screenshot(
+                    args.get("path"),
+                    args.get("full_page", False)
+                )
+            elif name == "browser_hover":
+                result = await self.browser.hover(args["ref"])
+            else:
+                return f"Unknown tool: {name}"
+
+            if not result.success:
+                return f"Error: {result.error}"
+
+            # Format result for LLM
+            if result.data is not None:
+                if isinstance(result.data, (dict, list)):
+                    return json.dumps(result.data, indent=2)[:8000]
+                return str(result.data)[:8000]
+            return "Success"
+
+        except Exception as e:
+            return f"Error: {str(e)}"
+
+    async def run_task(self, task: str, max_steps: int = 25) -> str:
+        """Run a task using LLM to orchestrate browser tools."""
         if self.model_type == "gemini":
             return await self._run_with_gemini(task, max_steps)
         elif self.model_type == "claude":
@@ -327,18 +328,15 @@ class LLMOrchestrator:
         client = genai.Client(api_key=api_key)
 
         if logger:
-            logger.info("Using Gemini with Browser MCP tools")
+            logger.info("Using Gemini with agent-browser tools")
 
-        # Convert MCP tools to Gemini function declarations
+        # Convert tools to Gemini function declarations
         tool_declarations = []
-        for tool in self.mcp_client.tools:
-            params = None
-            if tool.inputSchema:
-                params = clean_schema_for_gemini(tool.inputSchema)
-
+        for tool in self.tools:
+            params = clean_schema_for_gemini(tool["parameters"])
             tool_declarations.append(genai_types.FunctionDeclaration(
-                name=tool.name,
-                description=tool.description or "",
+                name=tool["name"],
+                description=tool["description"],
                 parameters=params,
             ))
 
@@ -374,20 +372,14 @@ class LLMOrchestrator:
                 tool_args = dict(fc.args) if fc.args else {}
 
                 print_tool_call(tool_name, tool_args)
-                self.tool_calls_count += 1
-
-                try:
-                    result = await self.mcp_client.call_tool(tool_name, tool_args)
-                    result_text = str(result.content[0].text if result.content else result)
-                except Exception as e:
-                    result_text = f"Error: {str(e)}"
+                result_text = await self.execute_tool(tool_name, tool_args)
 
                 if logger:
                     logger.info(f"Tool {tool_name} result: {result_text[:200]}...")
 
                 function_responses.append(genai_types.Part.from_function_response(
                     name=tool_name,
-                    response={"result": result_text[:8000]}
+                    response={"result": result_text}
                 ))
 
             response = await chat.send_message(function_responses)
@@ -403,7 +395,7 @@ class LLMOrchestrator:
             raise ValueError("ANTHROPIC_API_KEY environment variable is required")
 
         client = anthropic.Anthropic(api_key=api_key)
-        tools = mcp_tools_to_anthropic_format(self.mcp_client.tools)
+        tools = tools_to_anthropic_format(self.tools)
 
         messages: list[Any] = [{"role": "user", "content": task}]
         final_result = ""
@@ -436,13 +428,7 @@ class LLMOrchestrator:
                 tool_args = cast(dict[str, Any], tool_use.input)
 
                 print_tool_call(tool_name, tool_args)
-                self.tool_calls_count += 1
-
-                try:
-                    result = await self.mcp_client.call_tool(tool_name, tool_args)
-                    result_text = str(result.content[0].text if result.content else result)
-                except Exception as e:
-                    result_text = f"Error: {str(e)}"
+                result_text = await self.execute_tool(tool_name, tool_args)
 
                 tool_results.append({
                     "type": "tool_result",
@@ -466,7 +452,7 @@ class LLMOrchestrator:
             raise ValueError("OPENAI_API_KEY environment variable is required")
 
         client = OpenAI(api_key=api_key)
-        tools = mcp_tools_to_openai_format(self.mcp_client.tools)
+        tools = tools_to_openai_format(self.tools)
 
         messages: list[Any] = [{"role": "user", "content": task}]
         final_result = ""
@@ -495,13 +481,7 @@ class LLMOrchestrator:
                 tool_args = json.loads(tool_call.function.arguments)
 
                 print_tool_call(tool_name, tool_args)
-                self.tool_calls_count += 1
-
-                try:
-                    result = await self.mcp_client.call_tool(tool_name, tool_args)
-                    result_text = str(result.content[0].text if result.content else result)
-                except Exception as e:
-                    result_text = f"Error: {str(e)}"
+                result_text = await self.execute_tool(tool_name, tool_args)
 
                 messages.append({
                     "role": "tool",
@@ -514,14 +494,14 @@ class LLMOrchestrator:
 
 def parse_tweets_from_json(raw_output: str) -> list[Tweet]:
     """Parse tweets from JSON output."""
-    import re
-
     tweets = []
 
+    # Try to extract JSON from markdown code blocks
     code_block_match = re.search(r'```(?:json)?\s*([\s\S]*?)```', raw_output)
     if code_block_match:
         raw_output = code_block_match.group(1).strip()
 
+    # Find JSON array in output
     json_match = re.search(r'\[[\s\S]*\]', raw_output)
     if json_match:
         try:
@@ -550,13 +530,13 @@ def save_tweets_to_markdown(result: ModelResult, output_dir: Path) -> Path:
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_model_name = result.model_type.replace(" ", "_").replace("-", "_")
-    filename = f"tweets_browsermcp_{safe_model_name}_{timestamp}.md"
+    filename = f"tweets_agentbrowser_{safe_model_name}_{timestamp}.md"
     filepath = output_dir / filename
 
     with open(filepath, "w", encoding="utf-8") as f:
-        f.write(f"# Twitter/X Timeline Tweets (Browser MCP)\n\n")
+        f.write(f"# Twitter/X Timeline Tweets (agent-browser)\n\n")
         f.write(f"**Model:** {result.model_name}\n\n")
-        f.write(f"**Method:** Browser MCP (Chrome Extension)\n\n")
+        f.write(f"**Method:** agent-browser (Playwright/Chromium)\n\n")
         f.write(f"**Fetched at:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
         f.write(f"**Execution time:** {result.execution_time:.2f} seconds\n\n")
         f.write(f"**Tool calls:** {result.tool_calls_count}\n\n")
@@ -593,8 +573,24 @@ def save_tweets_to_markdown(result: ModelResult, output_dir: Path) -> Path:
     return filepath
 
 
-async def fetch_tweets_with_browsermcp(model_type: str, num_tweets: int = 5, num_scrolls: int = 3) -> ModelResult:
-    """Fetch tweets using Browser MCP + LLM."""
+async def fetch_tweets_with_agentbrowser(
+    model_type: str,
+    num_tweets: int = 5,
+    num_scrolls: int = 3,
+    headed: bool = False,
+    use_chrome_profile: bool = False,
+    chrome_profile_path: Optional[str] = None
+) -> ModelResult:
+    """Fetch tweets using agent-browser + LLM.
+
+    Args:
+        model_type: LLM model to use (gemini, claude, openai)
+        num_tweets: Number of tweets to fetch
+        num_scrolls: Number of page scrolls
+        headed: Show browser window
+        use_chrome_profile: Use default Chrome profile (with existing logins)
+        chrome_profile_path: Custom path to Chrome user data directory
+    """
     start_time = time.time()
     result = ModelResult(model_name="", model_type=model_type)
 
@@ -606,67 +602,113 @@ async def fetch_tweets_with_browsermcp(model_type: str, num_tweets: int = 5, num
     result.model_name = model_names.get(model_type, model_type)
 
     print(f"{Colors.CYAN}[Model]{Colors.ENDC} {Colors.BOLD}{result.model_name}{Colors.ENDC}")
-    print_info("Using Browser MCP - Chrome Extension approach")
-    print_info("No need to close Chrome! Uses your existing browser session.")
-    print_info("Make sure you've clicked 'Connect' in the Browser MCP extension!")
-    print_info("Connecting to Browser MCP server...")
 
-    mcp_client = BrowserMCPClient()
+    # Determine Chrome profile settings
+    executable_path = None
+    user_data_dir = None
+
+    if use_chrome_profile or chrome_profile_path:
+        # Use installed Chrome instead of bundled Chromium
+        if sys.platform == "darwin":  # macOS
+            executable_path = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
+            default_profile = os.path.expanduser("~/Library/Application Support/Google/Chrome")
+        elif sys.platform == "win32":  # Windows
+            executable_path = r"C:\Program Files\Google\Chrome\Application\chrome.exe"
+            default_profile = os.path.expanduser(r"~\AppData\Local\Google\Chrome\User Data")
+        else:  # Linux
+            executable_path = "/usr/bin/google-chrome"
+            default_profile = os.path.expanduser("~/.config/google-chrome")
+
+        user_data_dir = chrome_profile_path or default_profile
+        print_info(f"Using Chrome with profile: {user_data_dir}")
+        # Force headed mode when using Chrome profile
+        headed = True
+    else:
+        print_info("Using agent-browser (Playwright/Chromium)")
+
+    if headed:
+        print_info("Running in headed mode - browser window visible")
+    else:
+        print_info("Running headless (use --headed to see browser)")
+    print_info("Connecting to agent-browser...")
+
+    session_name = f"twitter_{model_type}_{int(time.time())}"
 
     try:
-        await mcp_client.connect()
-        print_success(f"Connected! {len(mcp_client.tools)} tools available")
+        async with AgentBrowserClient(
+            session=session_name,
+            headed=headed,
+            executable_path=executable_path,
+            user_data_dir=user_data_dir
+        ) as browser:
+            print_success("Connected to agent-browser")
 
-        orchestrator = LLMOrchestrator(model_type, mcp_client)
+            orchestrator = AgentBrowserOrchestrator(model_type, browser)
 
-        js_code = get_tweet_extraction_js(num_tweets)
+            js_code = get_tweet_extraction_js(num_tweets)
 
-        task = f"""You are a browser automation agent using Browser MCP tools. Complete this task:
+            task = f"""You are a browser automation agent using agent-browser tools.
 
-1. First, navigate to Twitter/X using browser_navigate with url "https://x.com"
-2. Wait for the page to load using browser_wait with duration 3000
-3. Take a snapshot to verify the page loaded using browser_snapshot
-4. Scroll down {num_scrolls} times to load more tweets:
-   - Use browser_press_key with key "PageDown" for each scroll
-   - Use browser_wait with duration 2000 after each scroll
-5. After scrolling, extract tweets by running JavaScript. Use browser_snapshot to get the page content first.
+WORKFLOW FOR FETCHING TWEETS:
 
-The JavaScript to extract tweets:
+1. Navigate to Twitter/X:
+   - Use browser_open with url "https://x.com"
+
+2. Wait for page load:
+   - Use browser_wait with target "3000" (3 seconds)
+
+3. Take a snapshot to see the page:
+   - Use browser_snapshot with interactive=true
+   - This returns refs like @e1, @e2 for interactive elements
+
+4. Check if login is required:
+   - If you see a login form, the user needs to login
+   - For now, try to proceed - Twitter may show some content without login
+
+5. Scroll to load more tweets:
+   - Repeat {num_scrolls} times:
+     a. Use browser_press with key "PageDown"
+     b. Use browser_wait with target "2000"
+
+6. Extract tweets using JavaScript:
+   - Use browser_evaluate with this script:
+
 {js_code}
 
-After extraction, return the JSON array of tweets.
+7. Return the JSON array of tweets from the evaluate result.
 
-IMPORTANT:
-- The user is already logged into Twitter in their Chrome browser
-- Use the Browser MCP tools available (browser_navigate, browser_wait, browser_snapshot, browser_press_key, etc.)
-- Return the extracted tweets as JSON in your final response
+IMPORTANT TIPS:
+- Use refs from browser_snapshot (e.g., @e1) for clicking/typing
+- After any navigation or click, take a new snapshot to see updated page
+- The JavaScript extracts: author, handle, content, link, timestamp
+- Return ONLY the JSON array of tweets at the end
+
+Begin the task now.
 """
 
-        print_info("Starting LLM orchestration...")
-        raw_output = await orchestrator.run_task(task, max_steps=25)
+            print_info("Starting LLM orchestration...")
+            raw_output = await orchestrator.run_task(task, max_steps=30)
 
-        result.raw_output = raw_output
-        result.tool_calls_count = orchestrator.tool_calls_count
+            result.raw_output = raw_output
+            result.tool_calls_count = orchestrator.tool_calls_count
 
-        if raw_output:
-            result.tweets = parse_tweets_from_json(raw_output)
-            result.success = len(result.tweets) > 0
-            if result.success:
-                print_success(f"Extracted {len(result.tweets)} tweets in {orchestrator.tool_calls_count} tool calls")
+            if raw_output:
+                result.tweets = parse_tweets_from_json(raw_output)
+                result.success = len(result.tweets) > 0
+                if result.success:
+                    print_success(f"Extracted {len(result.tweets)} tweets in {orchestrator.tool_calls_count} tool calls")
+                else:
+                    result.error_message = "Could not parse tweets from output"
+                    print_error(result.error_message)
             else:
-                result.error_message = "Could not parse tweets from output"
+                result.error_message = "No output from agent"
                 print_error(result.error_message)
-        else:
-            result.error_message = "No output from agent"
-            print_error(result.error_message)
 
     except Exception as e:
         result.error_message = str(e)
         print_error(f"Failed: {e}")
         if logger:
             logger.exception("Error during execution")
-    finally:
-        await mcp_client.disconnect()
 
     result.execution_time = time.time() - start_time
     return result
@@ -690,7 +732,7 @@ def print_result_summary(result: ModelResult) -> None:
 
 def print_comparison(results: list[ModelResult]) -> None:
     """Print a comparison table of all results."""
-    print_header("Model Comparison (Browser MCP)")
+    print_header("Model Comparison (agent-browser)")
 
     print(f"{'Model':<25} {'Status':<10} {'Time':<10} {'Tools':<8} {'Tweets':<8}")
     print("-" * 65)
@@ -709,7 +751,7 @@ def print_comparison(results: list[ModelResult]) -> None:
 
 async def main():
     parser = argparse.ArgumentParser(
-        description="Fetch tweets using Browser MCP (Chrome Extension) + LLM"
+        description="Fetch tweets using agent-browser (Playwright) + LLM"
     )
     parser.add_argument(
         "--model",
@@ -740,10 +782,26 @@ async def main():
         help="Output directory (default: output)"
     )
     parser.add_argument(
+        "--headed",
+        action="store_true",
+        help="Run browser in headed mode (visible window)"
+    )
+    parser.add_argument(
         "--log-level",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         default="INFO",
         help="Logging level (default: INFO)"
+    )
+    parser.add_argument(
+        "--use-chrome-profile",
+        action="store_true",
+        help="Use your default Chrome profile (with existing logins like Twitter)"
+    )
+    parser.add_argument(
+        "--chrome-profile-path",
+        type=str,
+        default=None,
+        help="Custom path to Chrome user data directory"
     )
 
     args = parser.parse_args()
@@ -758,14 +816,19 @@ async def main():
     global logger
     logger = setup_logging(args.log_level)
 
-    print_header("Twitter/X Fetcher (Browser MCP)")
+    print_header("Twitter/X Fetcher (agent-browser)")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"Tweets to fetch: {args.tweets}")
     print(f"Scroll count: {args.scrolls}")
     print(f"Output directory: {output_dir.absolute()}")
+    print(f"Headed mode: {args.headed}")
+    if args.use_chrome_profile or args.chrome_profile_path:
+        print(f"{Colors.GREEN}Chrome Profile: Enabled (using existing logins){Colors.ENDC}")
+        if args.chrome_profile_path:
+            print(f"Profile path: {args.chrome_profile_path}")
     print()
-    print(f"{Colors.GREEN}Advantage: No need to close Chrome!{Colors.ENDC}")
-    print(f"{Colors.GREEN}Uses your existing browser session with Twitter login.{Colors.ENDC}")
+    print(f"{Colors.CYAN}Using agent-browser (Vercel Labs){Colors.ENDC}")
+    print(f"{Colors.CYAN}Features: Ref-based selection, Playwright/Chromium{Colors.ENDC}")
 
     results = []
     saved_files = []
@@ -775,7 +838,10 @@ async def main():
         for model in models:
             print_header(f"Testing: {model.upper()}")
             try:
-                result = await fetch_tweets_with_browsermcp(model, args.tweets, args.scrolls)
+                result = await fetch_tweets_with_agentbrowser(
+                    model, args.tweets, args.scrolls, args.headed,
+                    args.use_chrome_profile, args.chrome_profile_path
+                )
                 results.append(result)
                 print_result_summary(result)
 
@@ -793,7 +859,10 @@ async def main():
 
         print_comparison(results)
     else:
-        result = await fetch_tweets_with_browsermcp(args.model, args.tweets, args.scrolls)
+        result = await fetch_tweets_with_agentbrowser(
+            args.model, args.tweets, args.scrolls, args.headed,
+            args.use_chrome_profile, args.chrome_profile_path
+        )
         results.append(result)
         print_result_summary(result)
 
