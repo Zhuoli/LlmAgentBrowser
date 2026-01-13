@@ -6,7 +6,9 @@ readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
     "python-dotenv>=1.0.0",
-    # LLM Provider SDKs
+    # browser-use library for browser automation
+    "browser-use>=0.1.0",
+    # LLM Provider SDKs (for alternative implementations)
     "anthropic>=0.40.0",
     "openai>=1.50.0",
     "google-genai>=1.0.0",
