@@ -1,6 +1,7 @@
 .PHONY: help install run run-all run-browser-use run-gemini run-claude run-openai clean clean-logs clean-output
 .PHONY: mcp-run mcp-all mcp-gemini mcp-claude mcp-openai
 .PHONY: bmcp-run bmcp-all bmcp-gemini bmcp-claude bmcp-openai
+.PHONY: pw-direct pw-claude pw-gemini pw-openai
 
 # Configuration
 TWEETS ?= 5
@@ -15,6 +16,9 @@ help: ## Show this help message
 	@echo ""
 	@echo "Targets (Browser MCP - RECOMMENDED, no need to close Chrome):"
 	@awk 'BEGIN {FS = ":.*##"} /^bmcp[a-zA-Z_-]*:.*##/ {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@echo ""
+	@echo "Targets (Playwright + pycookiecheat - no need to close Chrome):"
+	@awk 'BEGIN {FS = ":.*##"} /^pw-[a-zA-Z_-]*:.*##/ {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 	@echo ""
 	@echo "Targets (browser-use - requires closing Chrome):"
 	@awk 'BEGIN {FS = ":.*##"} /^run[a-zA-Z_-]*:.*##/ {printf "  %-20s %s\n", $$1, $$2}' $(MAKEFILE_LIST)
@@ -32,6 +36,8 @@ help: ## Show this help message
 	@echo ""
 	@echo "Examples:"
 	@echo "  make bmcp-claude TWEETS=10      # Browser MCP + Claude (RECOMMENDED)"
+	@echo "  make pw-direct TWEETS=10        # Playwright direct (no LLM)"
+	@echo "  make pw-claude TWEETS=10        # Playwright + Claude"
 	@echo "  make run-gemini TWEETS=10       # browser-use + Gemini"
 	@echo "  make mcp-gemini TWEETS=10       # Chrome DevTools MCP + Gemini"
 
@@ -104,3 +110,21 @@ bmcp-claude: ## Run Browser MCP with Claude Sonnet 4
 
 bmcp-openai: ## Run Browser MCP with OpenAI GPT-4o
 	uv run python twitter_fetcher_browsermcp.py --model openai --tweets $(TWEETS) --scrolls $(SCROLLS) --output $(OUTPUT) --log-level $(LOG_LEVEL)
+
+# ============================================================================
+# Playwright + pycookiecheat Targets (No need to close Chrome!)
+# This approach extracts cookies from Chrome's database and uses Playwright
+# to automate a separate browser instance with those cookies.
+# ============================================================================
+
+pw-direct: ## Run Playwright direct extraction (no LLM, fastest)
+	uv run python twitter_fetcher_playwright.py --mode direct --tweets $(TWEETS) --scrolls $(SCROLLS) --output $(OUTPUT) --log-level $(LOG_LEVEL)
+
+pw-claude: ## Run Playwright + Claude Sonnet 4
+	uv run python twitter_fetcher_playwright.py --mode llm --model claude --tweets $(TWEETS) --scrolls $(SCROLLS) --output $(OUTPUT) --log-level $(LOG_LEVEL)
+
+pw-gemini: ## Run Playwright + Gemini 2.0 Flash
+	uv run python twitter_fetcher_playwright.py --mode llm --model gemini --tweets $(TWEETS) --scrolls $(SCROLLS) --output $(OUTPUT) --log-level $(LOG_LEVEL)
+
+pw-openai: ## Run Playwright + OpenAI GPT-4o
+	uv run python twitter_fetcher_playwright.py --mode llm --model openai --tweets $(TWEETS) --scrolls $(SCROLLS) --output $(OUTPUT) --log-level $(LOG_LEVEL)
