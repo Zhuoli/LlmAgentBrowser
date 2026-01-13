@@ -6,13 +6,14 @@ A demo project to evaluate different approaches for LLM-powered browser automati
 
 ## Browser Automation Approaches
 
-This project implements **three different approaches** for browser automation:
+This project implements **four different approaches** for browser automation:
 
-| Approach | Close Chrome? | Setup | Recommended |
-|----------|---------------|-------|-------------|
-| **Browser MCP** | **No** | Chrome Extension + MCP | **Yes** |
-| browser-use | Yes | Python library | No |
-| Chrome DevTools MCP | Yes | MCP Server | No |
+| Approach | Close Chrome? | Setup | Control | Recommended |
+|----------|---------------|-------|---------|-------------|
+| **Browser MCP** | **No** | Chrome Extension + MCP | MCP tools | **Yes** |
+| **Playwright + pycookiecheat** | **No** | Python packages | Direct Python | Alternative |
+| browser-use | Yes | Python library | Via library | Legacy |
+| Chrome DevTools MCP | Yes | MCP Server | MCP tools | Legacy |
 
 ### Why Browser MCP is Recommended
 
@@ -21,6 +22,15 @@ Browser MCP uses a Chrome Extension that injects into your **running browser**, 
 - Uses your existing Twitter login session
 - Avoids bot detection (real browser fingerprint)
 - Works alongside your normal browsing
+
+### Playwright + pycookiecheat Alternative
+
+A pure Python approach that extracts cookies from Chrome's database:
+- No need to close Chrome (cookies extracted from SQLite database)
+- No browser extension required
+- Full Playwright API for direct Python control
+- Supports both direct extraction (no LLM) and LLM-guided modes
+- Ideal when you want more control over the automation logic
 
 ## Quick Start (Browser MCP)
 
@@ -146,6 +156,25 @@ make run-claude TWEETS=5
 make run-openai TWEETS=5
 ```
 
+### Playwright + pycookiecheat
+
+**No need to close Chrome!** Cookies are extracted from Chrome's database.
+
+```bash
+# Direct extraction (no LLM, fastest)
+make pw-direct TWEETS=5
+
+# LLM-guided extraction
+make pw-claude TWEETS=5
+make pw-gemini TWEETS=5
+make pw-openai TWEETS=5
+```
+
+First time setup - install Playwright browsers:
+```bash
+uv run playwright install chromium
+```
+
 ### Chrome DevTools MCP (Alternative)
 
 **Requires closing all Chrome windows first.**
@@ -254,6 +283,7 @@ output/
 ```
 LlmAgentBrowser/
 ├── twitter_fetcher_browsermcp.py  # Browser MCP implementation (RECOMMENDED)
+├── twitter_fetcher_playwright.py  # Playwright + pycookiecheat implementation
 ├── twitter_fetcher_mcp.py         # Chrome DevTools MCP implementation
 ├── twitter_tweet_fetcher.py       # browser-use implementation (legacy)
 ├── design.md                      # Architecture design document
@@ -289,6 +319,8 @@ These approaches require closing all Chrome windows first. Use **Browser MCP** i
 ## References
 
 - [Browser MCP](https://browsermcp.io/) - Chrome Extension + MCP Server
+- [Playwright](https://playwright.dev/python/) - Modern browser automation
+- [pycookiecheat](https://github.com/n8henrie/pycookiecheat) - Extract Chrome cookies
 - [Chrome MCP Server](https://github.com/hangwin/mcp-chrome) - Alternative with more tools
 - [browser-use](https://github.com/browser-use/browser-use) - Python browser automation
 - [Chrome DevTools MCP](https://github.com/anthropics/anthropic-quickstarts/tree/main/computer-use-demo) - Official Anthropic MCP

@@ -15,6 +15,9 @@ dependencies = [
     "anthropic>=0.40.0",
     "openai>=1.50.0",
     "google-genai>=1.0.0",  # New Google Gen AI SDK with MCP support
+    # Playwright + pycookiecheat dependencies
+    "playwright>=1.40.0",
+    "pycookiecheat>=0.7.0",
 ]
 
 [project.scripts]
